@@ -29,8 +29,7 @@ app.add_middleware(
 
 NAV_ITEMS = [
     {"id": "details", "label": "פירוט"},
-    {"id": "internal-ranking", "label": "דירוג פנימי"},
-    {"id": "report", "label": "דוח דירוג פנימי", "count": 12},
+    {"id": "report", "label": "דוח דירוג פנימי"},
     {"id": "processes", "label": "תהליכי דירוג"},
     {"id": "approvals", "label": "תור אישורים"},
     {"id": "issuers", "label": "מנפיקים"},
@@ -88,7 +87,10 @@ def health():
 
 @app.get("/api/nav")
 def get_nav():
-    return NAV_ITEMS
+    return [
+        {**item, "count": len(RANKING_ROWS)} if item["id"] == "report" else item
+        for item in NAV_ITEMS
+    ]
 
 
 @app.get("/api/report")
