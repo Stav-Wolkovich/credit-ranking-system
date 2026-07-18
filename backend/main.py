@@ -104,3 +104,14 @@ def update_status(process_id: str, update: StatusUpdate):
     if not database.get_ranking(process_id):
         raise HTTPException(status_code=404, detail="Process not found")
     return database.update_ranking_status(process_id, update.status, update.tone)
+
+
+@app.get("/api/processes")
+def get_processes():
+    """Everything the ranking-processes page needs in one call."""
+    rows = database.get_all_processes()
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "last_updated": date.today().isoformat(),
+    }

@@ -20,4 +20,5 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ status, tone }),
     }),
+  getProcesses: () => request("/processes"),
 };
