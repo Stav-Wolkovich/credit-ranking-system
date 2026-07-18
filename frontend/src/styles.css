@@ -1,0 +1,36 @@
+:root {
+  --navy: #0b1f3a;
+  --border: #dde2e8;
+  --bg: #eef1f5;
+  --text-dark: #1b2430;
+  --text-mid: #5a6472;
+  --text-light: #8a93a0;
+  --accent: #2f6fed;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Noto Sans Hebrew", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text-dark);
+  font-size: 14px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: right;
+  white-space: nowrap;
+}
+
+button {
+  font-family: inherit;
+}
