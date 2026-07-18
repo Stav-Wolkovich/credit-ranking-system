@@ -33,15 +33,7 @@ export default function ProcessesPage() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <PageHeader
-          crumbs={["בית", "דירוג פנימי", "תהליכי דירוג"]}
-          title="תהליכי דירוג"
-          meta={
-            data
-              ? `${data.total} תהליכים · עודכן ${data.last_updated} · ניהול ומעקב אחר תהליכי דירוג פנימי. יצירת תהליך חדש, מעקב אחר סטטוס ומילוי.`
-              : "טוען…"
-          }
-        />
+        <PageHeader title="תהליכי דירוג" />
         <button
           type="button"
           style={{

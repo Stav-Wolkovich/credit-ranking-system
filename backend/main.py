@@ -74,10 +74,16 @@ def health():
     return {"ok": True}
 
 
+NAV_COUNTS = {
+    "report": database.count_rankings,
+    "processes": database.count_processes,
+}
+
+
 @app.get("/api/nav")
 def get_nav():
     return [
-        {**item, "count": database.count_rankings()} if item["id"] == "report" else item
+        {**item, "count": NAV_COUNTS[item["id"]]()} if item["id"] in NAV_COUNTS else item
         for item in NAV_ITEMS
     ]
 
