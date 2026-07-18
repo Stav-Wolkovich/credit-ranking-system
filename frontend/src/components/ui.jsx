@@ -93,6 +93,63 @@ export function PlaceholderPage({ label }) {
   );
 }
 
+export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onCancel }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(20, 26, 38, 0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 100,
+      }}
+    >
+      <div style={{ background: "#fff", borderRadius: 10, width: 380, maxWidth: "90vw", padding: 22 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-dark)", marginBottom: 12 }}>
+          {title ?? "מחיקה"}
+        </div>
+        <div style={{ fontSize: 13.5, color: "var(--text-mid)", marginBottom: 20 }}>{message}</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              background: "#fff",
+              color: "var(--text-mid)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "9px 18px",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            ביטול
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            style={{
+              background: "#b52d2d",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              padding: "9px 18px",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {confirmLabel ?? "מחיקה"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ErrorBanner({ message }) {
   return (
     <div
