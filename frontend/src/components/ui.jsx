@@ -55,14 +55,16 @@ export function StatCard({ label, value, warn, loading }) {
 export function PageHeader({ crumbs, title, meta }) {
   return (
     <>
-      <div style={{ fontSize: 12.5, color: "var(--text-light)", marginBottom: 6 }}>
-        {crumbs.map((c, i) => (
-          <span key={i}>
-            {i > 0 && " > "}
-            <span style={{ color: i === crumbs.length - 1 ? "var(--text-mid)" : "var(--text-light)" }}>{c}</span>
-          </span>
-        ))}
-      </div>
+      {crumbs && crumbs.length > 0 && (
+        <div style={{ fontSize: 12.5, color: "var(--text-light)", marginBottom: 6 }}>
+          {crumbs.map((c, i) => (
+            <span key={i}>
+              {i > 0 && " > "}
+              <span style={{ color: i === crumbs.length - 1 ? "var(--text-mid)" : "var(--text-light)" }}>{c}</span>
+            </span>
+          ))}
+        </div>
+      )}
       <div style={{ fontSize: 22, fontWeight: 700, color: "var(--text-dark)", marginBottom: 2 }}>{title}</div>
       {meta && <div style={{ fontSize: 12.5, color: "var(--text-light)", marginBottom: 18 }}>{meta}</div>}
     </>
