@@ -4,59 +4,6 @@ import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
 
 const COLUMNS = ["מס' תהליך", "נושא הדירוג", "קוד", "מסגרת", "סטטוס", "ציון סופי", "דירוג סופי", "השלמה", ""];
 
-const TOOLBAR_ACTIONS = [
-  { icon: "➤", label: "שליחה" },
-  { icon: "📄", label: "PDF" },
-  { icon: "🖶", label: "הדפסה" },
-  { icon: "⇩", label: "יצוא Excel" },
-  { icon: "⇄", label: "השוואת צדדים" },
-  { icon: "⑂", label: "פילוח" },
-  { icon: "🔍", label: "חפש בתוך" },
-  { icon: "↕", label: "מיין" },
-  { icon: "▤", label: "קבץ לפי" },
-  { icon: "▦", label: "עמודות" },
-  { icon: "▽", label: "סינון" },
-  { icon: "↻", label: "רענון" },
-  { icon: "✎", label: "עריכה" },
-];
-
-function Toolbar() {
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "flex-end",
-        gap: 18,
-        padding: "10px 4px 16px",
-        borderBottom: "1px solid var(--border)",
-        marginBottom: 18,
-      }}
-    >
-      {TOOLBAR_ACTIONS.map((a) => (
-        <button
-          key={a.label}
-          type="button"
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 3,
-            background: "transparent",
-            border: "none",
-            color: "var(--text-mid)",
-            cursor: "pointer",
-            fontSize: 10.5,
-            whiteSpace: "nowrap",
-          }}
-        >
-          <span style={{ fontSize: 16 }}>{a.icon}</span>
-          {a.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 export default function ProcessesPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -85,8 +32,6 @@ export default function ProcessesPage() {
 
   return (
     <div>
-      <Toolbar />
-
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <PageHeader
           crumbs={["בית", "דירוג פנימי", "תהליכי דירוג"]}
