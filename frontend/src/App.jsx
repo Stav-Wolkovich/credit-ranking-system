@@ -5,6 +5,7 @@ import Sidebar from "./components/Sidebar.jsx";
 import { PlaceholderPage, ErrorBanner } from "./components/ui.jsx";
 import ReportPage from "./pages/ReportPage.jsx";
 import ProcessesPage from "./pages/ProcessesPage.jsx";
+import IssuersPage from "./pages/IssuersPage.jsx";
 
 const FALLBACK_NAV = [{ id: "report", label: "דוח דירוג פנימי", count: 12 }];
 
@@ -14,6 +15,8 @@ function PageContent({ page, navItems }) {
       return <ReportPage />;
     case "processes":
       return <ProcessesPage />;
+    case "issuers":
+      return <IssuersPage />;
     default: {
       const item = navItems.find((n) => n.id === page);
       return <PlaceholderPage label={item ? item.label : ""} />;

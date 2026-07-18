@@ -7,7 +7,14 @@ async function request(path, options = {}) {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    let message = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed?.detail) message = parsed.detail;
+    } catch {
+      // body wasn't JSON — fall back to the raw text set above
+    }
+    throw new Error(message);
   }
   return res.json();
 }
@@ -21,4 +28,15 @@ export const api = {
       body: JSON.stringify({ status, tone }),
     }),
   getProcesses: () => request("/processes"),
+  getIssuers: () => request("/issuers"),
+  createIssuer: (issuer) =>
+    request("/issuers", {
+      method: "POST",
+      body: JSON.stringify(issuer),
+    }),
+  updateIssuer: (id, issuer) =>
+    request(`/issuers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(issuer),
+    }),
 };
