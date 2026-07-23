@@ -16,6 +16,7 @@ async function request(path, options = {}) {
     }
     throw new Error(message);
   }
+  if (res.status === 204) return null;
   return res.json();
 }
 
@@ -38,5 +39,36 @@ export const api = {
     request(`/issuers/${id}`, {
       method: "PUT",
       body: JSON.stringify(issuer),
+    }),
+  deleteIssuer: (id) => request(`/issuers/${id}`, { method: "DELETE" }),
+  getModels: () => request("/models"),
+  createModel: (model) =>
+    request("/models", {
+      method: "POST",
+      body: JSON.stringify(model),
+    }),
+  updateModel: (id, model) =>
+    request(`/models/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(model),
+    }),
+  deleteModel: (id) => request(`/models/${id}`, { method: "DELETE" }),
+  getQuestionnaires: () => request("/questionnaires"),
+  getQuestionnaire: (id) => request(`/questionnaires/${id}`),
+  createQuestionnaire: (questionnaire) =>
+    request("/questionnaires", {
+      method: "POST",
+      body: JSON.stringify(questionnaire),
+    }),
+  updateQuestionnaire: (id, questionnaire) =>
+    request(`/questionnaires/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(questionnaire),
+    }),
+  deleteQuestionnaire: (id) => request(`/questionnaires/${id}`, { method: "DELETE" }),
+  duplicateQuestionnaire: (id, payload) =>
+    request(`/questionnaires/${id}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
 };

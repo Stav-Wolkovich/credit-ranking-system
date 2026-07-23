@@ -8,7 +8,7 @@ data store.
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import date
 
 from . import database
@@ -73,6 +73,36 @@ class IssuerInput(BaseModel):
     country: Optional[str] = None
 
 
+class ModelInput(BaseModel):
+    id: str
+    name: str
+    family: str
+    domain: str
+    owner: str
+    description: Optional[str] = None
+    questionnaire_ids: List[str] = []
+
+
+class ParameterInput(BaseModel):
+    name: str
+    type: str
+    weight: int = 0
+    answers: List[str] = []
+
+
+class QuestionnaireInput(BaseModel):
+    id: str
+    name: str
+    calculation_method: str
+    description: Optional[str] = None
+    parameters: List[ParameterInput] = []
+
+
+class QuestionnaireDuplicateInput(BaseModel):
+    id: str
+    name: str
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -86,6 +116,8 @@ NAV_COUNTS = {
     "report": database.count_rankings,
     "processes": database.count_processes,
     "issuers": database.count_issuers,
+    "models": database.count_models,
+    "questionnaires": database.count_questionnaires,
 }
 
 
@@ -177,3 +209,157 @@ def update_issuer(issuer_id: str, payload: IssuerInput):
     if database.issuer_name_taken(cleaned["name"], exclude_id=issuer_id):
         raise HTTPException(status_code=409, detail="מנפיק עם שם זה כבר קיים")
     return database.update_issuer(issuer_id, **cleaned)
+
+
+@app.delete("/api/issuers/{issuer_id}", status_code=204)
+def delete_issuer(issuer_id: str):
+    if not database.get_issuer(issuer_id):
+        raise HTTPException(status_code=404, detail="מנפיק לא נמצא")
+    database.delete_issuer(issuer_id)
+
+
+@app.get("/api/models")
+def get_models():
+    """Everything the models page needs in one call."""
+    rows = database.get_all_models()
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "last_updated": date.today().isoformat(),
+    }
+
+
+def _clean_model_input(payload: ModelInput):
+    model_id = payload.id.strip()
+    name = payload.name.strip()
+    family = payload.family.strip()
+    domain = payload.domain.strip()
+    owner = payload.owner.strip()
+    if not model_id or not name or not family or not domain or not owner:
+        raise HTTPException(status_code=422, detail="כל השדות הם שדות חובה")
+    return {
+        "id": model_id,
+        "name": name,
+        "family": family,
+        "domain": domain,
+        "owner": owner,
+        "description": (payload.description or "").strip() or None,
+        "questionnaire_ids": payload.questionnaire_ids,
+    }
+
+
+@app.post("/api/models", status_code=201)
+def create_model(payload: ModelInput):
+    cleaned = _clean_model_input(payload)
+    if database.model_code_taken(cleaned["id"]):
+        raise HTTPException(status_code=409, detail="מודל עם קוד זה כבר קיים")
+    if database.model_name_taken(cleaned["name"]):
+        raise HTTPException(status_code=409, detail="מודל עם שם זה כבר קיים")
+    return database.create_model(**cleaned, last_updated=date.today().strftime("%d/%m/%Y"))
+
+
+@app.put("/api/models/{model_id}")
+def update_model(model_id: str, payload: ModelInput):
+    if not database.get_model(model_id):
+        raise HTTPException(status_code=404, detail="מודל לא נמצא")
+    cleaned = _clean_model_input(payload)
+    if database.model_code_taken(cleaned["id"], exclude_id=model_id):
+        raise HTTPException(status_code=409, detail="מודל עם קוד זה כבר קיים")
+    if database.model_name_taken(cleaned["name"], exclude_id=model_id):
+        raise HTTPException(status_code=409, detail="מודל עם שם זה כבר קיים")
+    return database.update_model(model_id, **cleaned, last_updated=date.today().strftime("%d/%m/%Y"))
+
+
+@app.delete("/api/models/{model_id}", status_code=204)
+def delete_model(model_id: str):
+    if not database.get_model(model_id):
+        raise HTTPException(status_code=404, detail="מודל לא נמצא")
+    database.delete_model(model_id)
+
+
+@app.get("/api/questionnaires")
+def get_questionnaires():
+    rows = database.get_all_questionnaires()
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "last_updated": date.today().isoformat(),
+    }
+
+
+@app.get("/api/questionnaires/{questionnaire_id}")
+def get_questionnaire(questionnaire_id: str):
+    questionnaire = database.get_questionnaire(questionnaire_id)
+    if not questionnaire:
+        raise HTTPException(status_code=404, detail="שאלון לא נמצא")
+    return questionnaire
+
+
+def _clean_questionnaire_input(payload: QuestionnaireInput):
+    questionnaire_id = payload.id.strip()
+    name = payload.name.strip()
+    if not questionnaire_id or not name:
+        raise HTTPException(status_code=422, detail="קוד שאלון ושם שאלון הם שדות חובה")
+    parameters = [
+        {
+            "name": p.name.strip(),
+            "type": p.type,
+            "weight": p.weight,
+            "answers": [a.strip() for a in p.answers if a.strip()],
+        }
+        for p in payload.parameters
+    ]
+    return {
+        "id": questionnaire_id,
+        "name": name,
+        "calculation_method": payload.calculation_method,
+        "description": (payload.description or "").strip() or None,
+        "parameters": parameters,
+    }
+
+
+@app.post("/api/questionnaires", status_code=201)
+def create_questionnaire(payload: QuestionnaireInput):
+    cleaned = _clean_questionnaire_input(payload)
+    if database.questionnaire_code_taken(cleaned["id"]):
+        raise HTTPException(status_code=409, detail="שאלון עם קוד זה כבר קיים")
+    if database.questionnaire_name_taken(cleaned["name"]):
+        raise HTTPException(status_code=409, detail="שאלון עם שם זה כבר קיים")
+    return database.create_questionnaire(**cleaned, created_date=date.today().strftime("%d/%m/%Y"))
+
+
+@app.put("/api/questionnaires/{questionnaire_id}")
+def update_questionnaire(questionnaire_id: str, payload: QuestionnaireInput):
+    if not database.get_questionnaire(questionnaire_id):
+        raise HTTPException(status_code=404, detail="שאלון לא נמצא")
+    cleaned = _clean_questionnaire_input(payload)
+    if database.questionnaire_code_taken(cleaned["id"], exclude_id=questionnaire_id):
+        raise HTTPException(status_code=409, detail="שאלון עם קוד זה כבר קיים")
+    if database.questionnaire_name_taken(cleaned["name"], exclude_id=questionnaire_id):
+        raise HTTPException(status_code=409, detail="שאלון עם שם זה כבר קיים")
+    return database.update_questionnaire(questionnaire_id, **cleaned)
+
+
+@app.delete("/api/questionnaires/{questionnaire_id}", status_code=204)
+def delete_questionnaire(questionnaire_id: str):
+    if not database.get_questionnaire(questionnaire_id):
+        raise HTTPException(status_code=404, detail="שאלון לא נמצא")
+    database.delete_questionnaire(questionnaire_id)
+
+
+@app.post("/api/questionnaires/{questionnaire_id}/duplicate", status_code=201)
+def duplicate_questionnaire(questionnaire_id: str, payload: QuestionnaireDuplicateInput):
+    source = database.get_questionnaire(questionnaire_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="שאלון לא נמצא")
+    new_id = payload.id.strip()
+    new_name = payload.name.strip()
+    if not new_id or not new_name:
+        raise HTTPException(status_code=422, detail="קוד שאלון ושם שאלון הם שדות חובה")
+    if database.questionnaire_code_taken(new_id):
+        raise HTTPException(status_code=409, detail="שאלון עם קוד זה כבר קיים")
+    if database.questionnaire_name_taken(new_name):
+        raise HTTPException(status_code=409, detail="שאלון עם שם זה כבר קיים")
+    return database.duplicate_questionnaire(
+        questionnaire_id, new_id, new_name, created_date=date.today().strftime("%d/%m/%Y")
+    )

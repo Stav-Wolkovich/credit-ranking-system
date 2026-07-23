@@ -10,6 +10,23 @@ completion.
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active.
+
+Models columns are the fields the models page displays: id (model
+code), name, family, domain, owner, active_version, versions_count,
+segments_count, questionnaires_count, status, tone, last_updated,
+description. questionnaires_count is computed from the
+model_questionnaires join table rather than stored.
+
+Questionnaires columns are the fields the questionnaires page displays:
+id (code), name, calculation_method, type (מערכת/מותאם), status, tone,
+version, description, created_date, created_by. model_questionnaires
+links a model to the questionnaires assigned to it (model_id,
+questionnaire_id).
+
+questionnaire_parameters holds the scoring parameters that make up a
+questionnaire (questionnaire_id, name, type, weight, position).
+parameter_answers holds the ranked answer options for a parameter
+(parameter_id, text, position).
 """
 import sqlite3
 from pathlib import Path
@@ -51,6 +68,46 @@ SEED_ISSUER_ROWS = [
     {"id": "10000368", "name": "Allianz - Project Runde", "type": None, "sector": None, "country": None, "active": False},
     {"id": "10000530", "name": "Allianz - Rotera TRENDBELL DESIGNATED ACTIVITY COMPANY", "type": None, "sector": None, "country": None, "active": False},
     {"id": "10000497", "name": "Allianz (EPC 3) – Mehler", "type": None, "sector": None, "country": None, "active": False},
+]
+
+SEED_MODEL_ROWS = [
+    {"id": "CORP-IL", "name": "תאגידים ישראל", "family": "תאגידים", "domain": "Corporate", "owner": "נופר טורגמן", "active_version": "v2", "versions_count": 2, "segments_count": 1, "questionnaires_count": 2, "status": "פעיל", "tone": "green", "last_updated": "15/03/2026"},
+    {"id": "PROJ-FIN", "name": "מימון פרויקטים", "family": "מימון פרויקטים", "domain": "Project Finance", "owner": "דוד שלום", "active_version": "v1", "versions_count": 1, "segments_count": 0, "questionnaires_count": 0, "status": "פעיל", "tone": "green", "last_updated": "10/04/2026"},
+    {"id": "REAL-EST", "name": "תחנות כוח", "family": "מימון פרויקטים", "domain": "Project Finance", "owner": "נופר טורגמן", "active_version": "v1", "versions_count": 2, "segments_count": 1, "questionnaires_count": 0, "status": "פעיל", "tone": "green", "last_updated": "09/07/2026"},
+    {"id": "RE-PROJ", "name": "דירוג פרויקט נדל\"ן יזמי", "family": "נדל\"ן יזמי", "domain": "Real Estate Project", "owner": "נופר טורגמן", "active_version": "v1", "versions_count": 1, "segments_count": 1, "questionnaires_count": 2, "status": "פעיל", "tone": "green", "last_updated": "23/06/2026"},
+    {"id": "TEST-NOFAR", "name": "test1", "family": "test", "domain": "Corporate", "owner": "נופר טורגמן", "active_version": "v1", "versions_count": 1, "segments_count": 1, "questionnaires_count": 2, "status": "טיוטה", "tone": "gray", "last_updated": "09/07/2026"},
+    {"id": "TEST-NOFAR1", "name": "test2", "family": "test", "domain": "Corporate", "owner": "נופר טורגמן", "active_version": "v1", "versions_count": 1, "segments_count": 1, "questionnaires_count": 2, "status": "טיוטה", "tone": "gray", "last_updated": "06/07/2026"},
+]
+
+SEED_QUESTIONNAIRE_ROWS = [
+    {"id": "SECTOR-BIZ-POS", "name": "מיצוב עיסקי", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v6", "description": None, "created_date": "01/03/2024", "created_by": "נופר טורגמן"},
+    {"id": "SECTOR-IND-RATE", "name": "דירוג הענף בו פועלת החברה", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v6", "description": None, "created_date": "01/03/2024", "created_by": "נופר טורגמן"},
+    {"id": "PP-WEIGHTED", "name": "תחנות כוח - משתנים משוקללים", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v9", "description": None, "created_date": "15/06/2024", "created_by": "נופר טורגמן"},
+    {"id": "PP-ADJUSTMENTS", "name": "תחנות כוח - התאמות דירוג", "calculation_method": "סכום", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v25", "description": None, "created_date": "15/06/2024", "created_by": "נופר טורגמן"},
+    {"id": "RE-PROJ-WEIGHTED", "name": "דירוג פרויקט נדל\"ן יזמי - משתנים משוקללים", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v2", "description": None, "created_date": "15/06/2024", "created_by": "נופר טורגמן"},
+    {"id": "RE-PROJ-ADJUST", "name": "דירוג פרויקט נדל\"ן יזמי - התאמות דירוג", "calculation_method": "סכום", "type": "מערכת", "status": "פעיל", "tone": "green", "version": "v1", "description": None, "created_date": "15/06/2024", "created_by": "נופר טורגמן"},
+    {"id": "TEST", "name": "טסט", "calculation_method": "מקסימום", "type": "מותאם", "status": "טיוטה", "tone": "gray", "version": "v2", "description": None, "created_date": "06/07/2026", "created_by": "נופר טורגמן"},
+    {"id": "T1", "name": "test1", "calculation_method": "סכום", "type": "מותאם", "status": "טיוטה", "tone": "gray", "version": "v2", "description": None, "created_date": "06/07/2026", "created_by": "נופר טורגמן"},
+    {"id": "RE-PROJ-MACRO", "name": "סיכוני מקרו פרויקט נדל\"ן יזמי", "calculation_method": "ממוצע משוקלל", "type": "מותאם", "status": "טיוטה", "tone": "gray", "version": "v1", "description": None, "created_date": "09/07/2026", "created_by": "נופר טורגמן"},
+]
+
+SEED_PARAMETER_ROWS = [
+    {"name": "נתח שוק", "type": "סובייקטיבי", "weight": 25},
+    {"name": "השפעה על מחירי שוק", "type": "סובייקטיבי", "weight": 25},
+    {"name": "כח מיקוח מול ספקים", "type": "סובייקטיבי", "weight": 25},
+    {"name": "מיקום החברה בענף", "type": "סובייקטיבי", "weight": 25},
+]
+
+SEED_ANSWER_TEXTS = [
+    "חברה מובילה עם נתח שוק משמעותי",
+    "מהותי",
+    "מעל המחוצע הענפי",
+    "ממוצע בענף",
+    "מעט מתחת למחוצע בענף",
+    "מתחת לממוצע",
+    "הרבה מתחת למחוצע בענף",
+    "יחסים פיננסים ונתח שוק הרבה מתחת לממוצע",
+    "יחסים פיננסים חלשים מאד נתח שוק זניח",
 ]
 
 
@@ -138,6 +195,155 @@ def init_db():
             SEED_ISSUER_ROWS,
         )
         conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS models (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            family TEXT NOT NULL,
+            domain TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            active_version TEXT NOT NULL,
+            versions_count INTEGER NOT NULL DEFAULT 1,
+            segments_count INTEGER NOT NULL DEFAULT 0,
+            questionnaires_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            tone TEXT NOT NULL,
+            last_updated TEXT NOT NULL,
+            description TEXT
+        )
+        """
+    )
+    model_columns = {row["name"] for row in conn.execute("PRAGMA table_info(models)").fetchall()}
+    if "description" not in model_columns:
+        conn.execute("ALTER TABLE models ADD COLUMN description TEXT")
+    model_count = conn.execute("SELECT COUNT(*) FROM models").fetchone()[0]
+    if model_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO models
+                (id, name, family, domain, owner, active_version, versions_count,
+                 segments_count, questionnaires_count, status, tone, last_updated)
+            VALUES
+                (:id, :name, :family, :domain, :owner, :active_version, :versions_count,
+                 :segments_count, :questionnaires_count, :status, :tone, :last_updated)
+            """,
+            SEED_MODEL_ROWS,
+        )
+        conn.commit()
+
+    # The original schema had `description TEXT NOT NULL`. SQLite can't relax a
+    # NOT NULL constraint via ALTER TABLE, so if that's still in place, rebuild
+    # the table (preserving existing rows) before applying the current schema.
+    desc_col = next(
+        (
+            r
+            for r in conn.execute("PRAGMA table_info(questionnaires)").fetchall()
+            if r["name"] == "description"
+        ),
+        None,
+    )
+    if desc_col is not None and desc_col["notnull"]:
+        conn.execute("ALTER TABLE questionnaires RENAME TO questionnaires_old")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS questionnaires (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            calculation_method TEXT,
+            type TEXT,
+            status TEXT,
+            tone TEXT,
+            version TEXT,
+            description TEXT,
+            created_date TEXT,
+            created_by TEXT
+        )
+        """
+    )
+    if desc_col is not None and desc_col["notnull"]:
+        conn.execute("INSERT INTO questionnaires (id, description) SELECT id, description FROM questionnaires_old")
+        conn.execute("DROP TABLE questionnaires_old")
+
+    for seed in SEED_QUESTIONNAIRE_ROWS:
+        existing = conn.execute(
+            "SELECT name FROM questionnaires WHERE id = ?", (seed["id"],)
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO questionnaires
+                    (id, name, calculation_method, type, status, tone, version, description, created_date, created_by)
+                VALUES
+                    (:id, :name, :calculation_method, :type, :status, :tone, :version, :description, :created_date, :created_by)
+                """,
+                seed,
+            )
+        elif existing["name"] is None:
+            # pre-existing row from before these columns were added — backfill it.
+            # description used to double as the row's label; reset it to the
+            # seed's real (empty) description now that `name` covers that.
+            conn.execute(
+                """
+                UPDATE questionnaires
+                SET name = :name, calculation_method = :calculation_method, type = :type,
+                    status = :status, tone = :tone, version = :version,
+                    description = :description, created_date = :created_date, created_by = :created_by
+                WHERE id = :id
+                """,
+                seed,
+            )
+    conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS questionnaire_parameters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            questionnaire_id TEXT NOT NULL REFERENCES questionnaires(id),
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            weight INTEGER NOT NULL DEFAULT 0,
+            position INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS parameter_answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parameter_id INTEGER NOT NULL REFERENCES questionnaire_parameters(id),
+            text TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    parameter_count = conn.execute("SELECT COUNT(*) FROM questionnaire_parameters").fetchone()[0]
+    if parameter_count == 0:
+        for position, param in enumerate(SEED_PARAMETER_ROWS, start=1):
+            cur = conn.execute(
+                "INSERT INTO questionnaire_parameters (questionnaire_id, name, type, weight, position) VALUES (?, ?, ?, ?, ?)",
+                ("SECTOR-BIZ-POS", param["name"], param["type"], param["weight"], position),
+            )
+            if position == 1:
+                param_id = cur.lastrowid
+                conn.executemany(
+                    "INSERT INTO parameter_answers (parameter_id, text, position) VALUES (?, ?, ?)",
+                    [(param_id, text, i) for i, text in enumerate(SEED_ANSWER_TEXTS, start=1)],
+                )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS model_questionnaires (
+            model_id TEXT NOT NULL REFERENCES models(id),
+            questionnaire_id TEXT NOT NULL REFERENCES questionnaires(id),
+            PRIMARY KEY (model_id, questionnaire_id)
+        )
+        """
+    )
+    conn.commit()
     conn.close()
 
 
@@ -269,3 +475,333 @@ def update_issuer(
     conn.commit()
     conn.close()
     return get_issuer(id)
+
+
+def delete_issuer(issuer_id: str):
+    conn = get_connection()
+    conn.execute("DELETE FROM issuers WHERE id = ?", (issuer_id,))
+    conn.commit()
+    conn.close()
+
+
+def _attach_questionnaire_ids(conn, models):
+    links = conn.execute("SELECT model_id, questionnaire_id FROM model_questionnaires").fetchall()
+    ids_by_model = {}
+    for link in links:
+        ids_by_model.setdefault(link["model_id"], []).append(link["questionnaire_id"])
+    for model in models:
+        q_ids = ids_by_model.get(model["id"], [])
+        model["questionnaire_ids"] = q_ids
+        model["questionnaires_count"] = len(q_ids)
+    return models
+
+
+def get_all_models():
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM models ORDER BY rowid ASC").fetchall()]
+    _attach_questionnaire_ids(conn, rows)
+    conn.close()
+    return rows
+
+
+def count_models():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM models").fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_model(model_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM models WHERE id = ?", (model_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    model = dict(row)
+    _attach_questionnaire_ids(conn, [model])
+    conn.close()
+    return model
+
+
+def model_code_taken(code: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM models WHERE id = ? AND id != ?", (code, exclude_id)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM models WHERE id = ?", (code,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def model_name_taken(name: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM models WHERE name = ? AND id != ?", (name, exclude_id)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM models WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_model(
+    id: str,
+    name: str,
+    family: str,
+    domain: str,
+    owner: str,
+    last_updated: str,
+    description: str | None = None,
+    questionnaire_ids: list[str] | None = None,
+):
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO models
+            (id, name, family, domain, owner, active_version, versions_count,
+             segments_count, questionnaires_count, status, tone, last_updated, description)
+        VALUES (?, ?, ?, ?, ?, 'v1', 1, 0, 0, 'טיוטה', 'gray', ?, ?)
+        """,
+        (id, name, family, domain, owner, last_updated, description),
+    )
+    _replace_model_questionnaires(conn, id, questionnaire_ids or [])
+    conn.commit()
+    conn.close()
+    return get_model(id)
+
+
+def update_model(
+    original_id: str,
+    id: str,
+    name: str,
+    family: str,
+    domain: str,
+    owner: str,
+    last_updated: str,
+    description: str | None = None,
+    questionnaire_ids: list[str] | None = None,
+):
+    conn = get_connection()
+    conn.execute(
+        """
+        UPDATE models SET id = ?, name = ?, family = ?, domain = ?, owner = ?, last_updated = ?, description = ?
+        WHERE id = ?
+        """,
+        (id, name, family, domain, owner, last_updated, description, original_id),
+    )
+    if original_id != id:
+        conn.execute("DELETE FROM model_questionnaires WHERE model_id = ?", (original_id,))
+    if questionnaire_ids is not None:
+        _replace_model_questionnaires(conn, id, questionnaire_ids)
+    conn.commit()
+    conn.close()
+    return get_model(id)
+
+
+def delete_model(model_id: str):
+    conn = get_connection()
+    conn.execute("DELETE FROM model_questionnaires WHERE model_id = ?", (model_id,))
+    conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
+    conn.commit()
+    conn.close()
+
+
+def _replace_model_questionnaires(conn, model_id: str, questionnaire_ids: list[str]):
+    conn.execute("DELETE FROM model_questionnaires WHERE model_id = ?", (model_id,))
+    if questionnaire_ids:
+        conn.executemany(
+            "INSERT INTO model_questionnaires (model_id, questionnaire_id) VALUES (?, ?)",
+            [(model_id, q_id) for q_id in questionnaire_ids],
+        )
+
+
+def _questionnaire_parameter_counts(conn):
+    rows = conn.execute(
+        "SELECT questionnaire_id, COUNT(*) AS n FROM questionnaire_parameters GROUP BY questionnaire_id"
+    ).fetchall()
+    return {row["questionnaire_id"]: row["n"] for row in rows}
+
+
+def get_all_questionnaires():
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM questionnaires ORDER BY rowid ASC").fetchall()]
+    counts = _questionnaire_parameter_counts(conn)
+    for row in rows:
+        row["parameters_count"] = counts.get(row["id"], 0)
+    conn.close()
+    return rows
+
+
+def count_questionnaires():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM questionnaires").fetchone()[0]
+    conn.close()
+    return count
+
+
+def _get_parameters_with_answers(conn, questionnaire_id: str):
+    param_rows = conn.execute(
+        "SELECT * FROM questionnaire_parameters WHERE questionnaire_id = ? ORDER BY position ASC",
+        (questionnaire_id,),
+    ).fetchall()
+    parameters = []
+    for p in param_rows:
+        answer_rows = conn.execute(
+            "SELECT text FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
+            (p["id"],),
+        ).fetchall()
+        parameters.append(
+            {
+                "name": p["name"],
+                "type": p["type"],
+                "weight": p["weight"],
+                "answers": [a["text"] for a in answer_rows],
+            }
+        )
+    return parameters
+
+
+def get_questionnaire(questionnaire_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM questionnaires WHERE id = ?", (questionnaire_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    questionnaire = dict(row)
+    questionnaire["parameters"] = _get_parameters_with_answers(conn, questionnaire_id)
+    questionnaire["parameters_count"] = len(questionnaire["parameters"])
+    conn.close()
+    return questionnaire
+
+
+def questionnaire_code_taken(code: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM questionnaires WHERE id = ? AND id != ?", (code, exclude_id)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM questionnaires WHERE id = ?", (code,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def questionnaire_name_taken(name: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM questionnaires WHERE name = ? AND id != ?", (name, exclude_id)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM questionnaires WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def _replace_questionnaire_parameters(conn, questionnaire_id: str, parameters: list[dict]):
+    old_param_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM questionnaire_parameters WHERE questionnaire_id = ?", (questionnaire_id,)
+        ).fetchall()
+    ]
+    for pid in old_param_ids:
+        conn.execute("DELETE FROM parameter_answers WHERE parameter_id = ?", (pid,))
+    conn.execute("DELETE FROM questionnaire_parameters WHERE questionnaire_id = ?", (questionnaire_id,))
+
+    for position, param in enumerate(parameters, start=1):
+        cur = conn.execute(
+            "INSERT INTO questionnaire_parameters (questionnaire_id, name, type, weight, position) VALUES (?, ?, ?, ?, ?)",
+            (questionnaire_id, param["name"], param["type"], param["weight"], position),
+        )
+        param_id = cur.lastrowid
+        answers = param.get("answers") or []
+        if answers:
+            conn.executemany(
+                "INSERT INTO parameter_answers (parameter_id, text, position) VALUES (?, ?, ?)",
+                [(param_id, text, i) for i, text in enumerate(answers, start=1)],
+            )
+
+
+def create_questionnaire(
+    id: str, name: str, calculation_method: str, description: str | None, created_date: str, parameters: list[dict]
+):
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO questionnaires
+            (id, name, calculation_method, type, status, tone, version, description, created_date, created_by)
+        VALUES (?, ?, ?, 'מותאם', 'טיוטה', 'gray', 'v1', ?, ?, 'נופר טורגמן')
+        """,
+        (id, name, calculation_method, description, created_date),
+    )
+    _replace_questionnaire_parameters(conn, id, parameters)
+    conn.commit()
+    conn.close()
+    return get_questionnaire(id)
+
+
+def update_questionnaire(
+    original_id: str,
+    id: str,
+    name: str,
+    calculation_method: str,
+    description: str | None,
+    parameters: list[dict],
+):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE questionnaires SET id = ?, name = ?, calculation_method = ?, description = ? WHERE id = ?",
+        (id, name, calculation_method, description, original_id),
+    )
+    if original_id != id:
+        conn.execute(
+            "UPDATE model_questionnaires SET questionnaire_id = ? WHERE questionnaire_id = ?",
+            (id, original_id),
+        )
+        conn.execute(
+            "UPDATE questionnaire_parameters SET questionnaire_id = ? WHERE questionnaire_id = ?",
+            (id, original_id),
+        )
+    _replace_questionnaire_parameters(conn, id, parameters)
+    conn.commit()
+    conn.close()
+    return get_questionnaire(id)
+
+
+def delete_questionnaire(questionnaire_id: str):
+    conn = get_connection()
+    param_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM questionnaire_parameters WHERE questionnaire_id = ?", (questionnaire_id,)
+        ).fetchall()
+    ]
+    for pid in param_ids:
+        conn.execute("DELETE FROM parameter_answers WHERE parameter_id = ?", (pid,))
+    conn.execute("DELETE FROM questionnaire_parameters WHERE questionnaire_id = ?", (questionnaire_id,))
+    conn.execute("DELETE FROM model_questionnaires WHERE questionnaire_id = ?", (questionnaire_id,))
+    conn.execute("DELETE FROM questionnaires WHERE id = ?", (questionnaire_id,))
+    conn.commit()
+    conn.close()
+
+
+def duplicate_questionnaire(source_id: str, new_id: str, new_name: str, created_date: str):
+    conn = get_connection()
+    source = conn.execute("SELECT * FROM questionnaires WHERE id = ?", (source_id,)).fetchone()
+    conn.execute(
+        """
+        INSERT INTO questionnaires
+            (id, name, calculation_method, type, status, tone, version, description, created_date, created_by)
+        VALUES (?, ?, ?, 'מותאם', 'טיוטה', 'gray', 'v1', ?, ?, 'נופר טורגמן')
+        """,
+        (new_id, new_name, source["calculation_method"], source["description"], created_date),
+    )
+    parameters = _get_parameters_with_answers(conn, source_id)
+    _replace_questionnaire_parameters(conn, new_id, parameters)
+    conn.commit()
+    conn.close()
+    return get_questionnaire(new_id)

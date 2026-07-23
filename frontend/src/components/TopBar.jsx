@@ -61,7 +61,7 @@ export default function TopBar({ onToggleSidebar }) {
             fontWeight: 600,
           }}
         >
-          HR
+          SW
         </div>
       </div>
     </div>

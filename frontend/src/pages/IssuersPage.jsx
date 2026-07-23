@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
-import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
+import { Badge, PageHeader, ErrorBanner, ConfirmDialog } from "../components/ui.jsx";
 import IssuerModal from "../components/IssuerModal.jsx";
 
 const COLUMNS = ["קוד מנפיק", "שם מנפיק", "סוג", "סקטור", "מדינה", "פעיל", "נכסים מקושרים", "פעולות"];
@@ -11,6 +11,7 @@ export default function IssuersPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const loadIssuers = useCallback(() => {
     setLoading(true);
@@ -32,6 +33,15 @@ export default function IssuersPage() {
     if (!q) return rows;
     return rows.filter((r) => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q));
   }, [rows, search]);
+
+  function confirmDelete() {
+    const issuer = deleteTarget;
+    setDeleteTarget(null);
+    api
+      .deleteIssuer(issuer.id)
+      .then(() => loadIssuers())
+      .catch((err) => setError(err.message));
+  }
 
   return (
     <div>
@@ -117,13 +127,21 @@ export default function IssuersPage() {
                     🔗
                   </button>
                 </td>
-                <td style={{ padding: "12px 16px" }}>
+                <td style={{ padding: "12px 16px", display: "flex", gap: 10 }}>
                   <button
                     type="button"
                     onClick={() => setModal({ mode: "edit", issuer: r })}
                     style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-mid)" }}
                   >
                     ✎
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(r)}
+                    aria-label="מחיקה"
+                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
+                  >
+                    🗑
                   </button>
                 </td>
               </tr>
@@ -141,6 +159,15 @@ export default function IssuersPage() {
             setModal(null);
             loadIssuers();
           }}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="מחיקה"
+          message={`למחוק את המנפיק "${deleteTarget.name}"?`}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={confirmDelete}
         />
       )}
     </div>
