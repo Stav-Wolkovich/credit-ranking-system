@@ -45,7 +45,7 @@ export default function ReportPage() {
         <StatCard label="יפוגו תוך 60 יום" value={summary?.expiring_in_60_days} warn loading={loading} />
         <StatCard label="ממתינים לאישור" value={summary?.awaiting_approval} loading={loading} />
         <StatCard label="בתהליך" value={summary?.in_progress} loading={loading} />
-        <StatCard label="תהליכים פעילים" value={summary?.active_processes} loading={loading} />
+        <StatCard label="תהליכים בתוקף" value={summary?.in_force} loading={loading} />
       </div>
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>

@@ -2,7 +2,13 @@
 SQLite data access for the Rankings and Ranking Processes tables.
 
 Rankings columns are the fields the report page displays: id, status,
-tone (badge color), model, team, framework, kind, code, subject.
+tone (badge color), model, team, framework, kind, code, subject,
+approval_date (set once a ranking reaches "בתוקף"; used to flag
+rankings expiring within 60 days — i.e. approved 10+ months ago).
+
+Canonical ranking statuses: טיוטה, בעבודה, ממתין לאישור, הוחזר, מאושר,
+ממתין לוועדה, אושר ועדה, בתוקף, פג תוקף — plus the legacy בוטל/מושהה
+still used by a couple of seed rows.
 
 Ranking Processes columns are the fields the processes page displays: id,
 subject, code, framework, status, tone, final_score, final_rating,
@@ -34,14 +40,14 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent / "rankings.db"
 
 SEED_ROWS = [
-    {"id": "RP-2026-00031", "status": "בתהליך", "tone": "blue", "model": "תאגידים ישראל v2", "team": "צוות השקעות", "framework": "Real Estate Development LOAN A, LLC 1002", "kind": "מנפיק", "code": "LOAN-34285", "subject": "חשבון מנוהל - Fuse Funding"},
-    {"id": "RP-2026-00030", "status": "טיוטה", "tone": "gray", "model": "תחנות כוח v1", "team": "צוות השקעות", "framework": "Real Estate Development LOAN A, LLC 1002", "kind": "מנפיק", "code": "LOAN-34285", "subject": "חשבון מנוהל - Fuse Funding"},
-    {"id": "RP-2026-00025", "status": "אושר בוועדה", "tone": "green", "model": "תאגידים ישראל v2", "team": "צוות השקעות", "framework": "TEST", "kind": "נכס", "code": "LOAN-33957", "subject": "חשבון מנוהל - Fuse Funding"},
-    {"id": "RP-2026-00024", "status": "בתהליך", "tone": "blue", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "Real Estate Development LOAN A, LLC 1002", "kind": "נכס", "code": "LOAN-34285", "subject": "חשבון מנוהל - Fuse Funding"},
-    {"id": "RP-2026-00023", "status": "בוטל", "tone": "red", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "TEST1", "kind": "נכס", "code": "LOAN-23967", "subject": "Allianz Archimedes SUZIE INVESTMENT"},
-    {"id": "RP-2026-00022", "status": "מושהה", "tone": "amber", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "טסט נופר", "kind": "נכס", "code": "LOAN-23486", "subject": "WALL STREET 60"},
-    {"id": "RP-2026-00019", "status": "בתוקף", "tone": "green", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "ברקת מימון פרויקט שמגר", "kind": "נכס", "code": "LOAN-23903", "subject": "ברקת מימון"},
-    {"id": "RP-2026-00018", "status": "בתוקף", "tone": "green", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "אחים עופר הלוואה - 01.06.21", "kind": "נכס", "code": "LOAN-9904", "subject": "אחים עופר ירושלים"},
+    {"id": "RP-2026-00031", "status": "ממתין לאישור", "tone": "amber", "model": "תאגידים ישראל v2", "team": "צוות השקעות", "framework": "Real Estate Development LOAN A, LLC 1002", "kind": "מנפיק", "code": "LOAN-34285", "subject": "חשבון מנוהל - Fuse Funding", "approval_date": None},
+    {"id": "RP-2026-00030", "status": "טיוטה", "tone": "gray", "model": "תחנות כוח v1", "team": "צוות השקעות", "framework": "Real Estate Development LOAN A, LLC 1002", "kind": "מנפיק", "code": "LOAN-34285", "subject": "חשבון מנוהל - Fuse Funding", "approval_date": None},
+    {"id": "RP-2026-00025", "status": "אושר ועדה", "tone": "green", "model": "תאגידים ישראל v2", "team": "צוות השקעות", "framework": "TEST", "kind": "נכס", "code": "LOAN-33957", "subject": "חשבון מנוהל - Fuse Funding", "approval_date": "2026-06-01"},
+    {"id": "RP-2026-00024", "status": "בעבודה", "tone": "blue", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "Real Estate Development LOAN A, LLC 1002", "kind": "נכס", "code": "LOAN-34285", "subject": "חשבון מנוהל - Fuse Funding", "approval_date": None},
+    {"id": "RP-2026-00023", "status": "בוטל", "tone": "red", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "TEST1", "kind": "נכס", "code": "LOAN-23967", "subject": "Allianz Archimedes SUZIE INVESTMENT", "approval_date": None},
+    {"id": "RP-2026-00022", "status": "מושהה", "tone": "amber", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "טסט נופר", "kind": "נכס", "code": "LOAN-23486", "subject": "WALL STREET 60", "approval_date": None},
+    {"id": "RP-2026-00019", "status": "בתוקף", "tone": "green", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "ברקת מימון פרויקט שמגר", "kind": "נכס", "code": "LOAN-23903", "subject": "ברקת מימון", "approval_date": "2025-08-15"},
+    {"id": "RP-2026-00018", "status": "בתוקף", "tone": "green", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "אחים עופר הלוואה - 01.06.21", "kind": "נכס", "code": "LOAN-9904", "subject": "אחים עופר ירושלים", "approval_date": "2026-05-10"},
 ]
 
 SEED_PROCESS_ROWS = [
@@ -130,19 +136,45 @@ def init_db():
             framework TEXT NOT NULL,
             kind TEXT NOT NULL,
             code TEXT NOT NULL,
-            subject TEXT NOT NULL
+            subject TEXT NOT NULL,
+            approval_date TEXT
         )
         """
     )
+    rankings_columns = {row["name"] for row in conn.execute("PRAGMA table_info(rankings)").fetchall()}
+    if "approval_date" not in rankings_columns:
+        conn.execute("ALTER TABLE rankings ADD COLUMN approval_date TEXT")
     row_count = conn.execute("SELECT COUNT(*) FROM rankings").fetchone()[0]
     if row_count == 0:
         conn.executemany(
             """
-            INSERT INTO rankings (id, status, tone, model, team, framework, kind, code, subject)
-            VALUES (:id, :status, :tone, :model, :team, :framework, :kind, :code, :subject)
+            INSERT INTO rankings (id, status, tone, model, team, framework, kind, code, subject, approval_date)
+            VALUES (:id, :status, :tone, :model, :team, :framework, :kind, :code, :subject, :approval_date)
             """,
             SEED_ROWS,
         )
+        conn.commit()
+    else:
+        # Backfill rows created before the canonical status set / approval_date
+        # existed. Only touches rows still on their old status string, so any
+        # real status change made since (via the PATCH endpoint) is preserved.
+        old_statuses = {"בתהליך", "אושר בוועדה"}
+        for seed in SEED_ROWS:
+            row = conn.execute(
+                "SELECT status, approval_date FROM rankings WHERE id = ?", (seed["id"],)
+            ).fetchone()
+            if row is None:
+                continue
+            if row["status"] in old_statuses and row["status"] != seed["status"]:
+                conn.execute(
+                    "UPDATE rankings SET status = ?, tone = ? WHERE id = ?",
+                    (seed["status"], seed["tone"], seed["id"]),
+                )
+            if row["approval_date"] is None and seed["approval_date"] is not None:
+                conn.execute(
+                    "UPDATE rankings SET approval_date = ? WHERE id = ?",
+                    (seed["approval_date"], seed["id"]),
+                )
         conn.commit()
 
     conn.execute(
@@ -391,6 +423,32 @@ def count_rankings_by_status(status: str):
         "SELECT COUNT(*) FROM rankings WHERE status = ?", (status,)
     ).fetchone()[0]
     conn.close()
+    return count
+
+
+def _months_elapsed(from_date, today):
+    months = (today.year - from_date.year) * 12 + (today.month - from_date.month)
+    if today.day < from_date.day:
+        months -= 1
+    return months
+
+
+def count_rankings_expiring_soon(min_months_since_approval: int = 10):
+    """Rankings that are בתוקף and were approved long enough ago that they're
+    within 60 days of their (implied) 12-month expiry."""
+    from datetime import date
+
+    today = date.today()
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT approval_date FROM rankings WHERE status = 'בתוקף' AND approval_date IS NOT NULL"
+    ).fetchall()
+    conn.close()
+    count = 0
+    for row in rows:
+        approved = date.fromisoformat(row["approval_date"])
+        if _months_elapsed(approved, today) >= min_months_since_approval:
+            count += 1
     return count
 
 

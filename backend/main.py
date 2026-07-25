@@ -47,10 +47,10 @@ NAV_ITEMS = [
 
 def compute_summary():
     return {
-        "expiring_in_60_days": 1,
-        "awaiting_approval": 1,
-        "in_progress": database.count_rankings_by_status("בתהליך"),
-        "active_processes": 21,
+        "expiring_in_60_days": database.count_rankings_expiring_soon(10),
+        "awaiting_approval": database.count_rankings_by_status("ממתין לאישור"),
+        "in_progress": database.count_rankings_by_status("בעבודה"),
+        "in_force": database.count_rankings_by_status("בתוקף"),
         "total_processes": database.count_rankings() * 3,  # placeholder metric, matches "24 processes" in the mock
         "last_updated": date.today().isoformat(),
     }

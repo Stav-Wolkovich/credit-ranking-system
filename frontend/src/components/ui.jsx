@@ -6,6 +6,7 @@ const TONE_STYLES = {
   green: { bg: "#e5f5ea", text: "#1e7e3c" },
   red: { bg: "#fbe9e9", text: "#b52d2d" },
   amber: { bg: "#fdf1e0", text: "#a6650b" },
+  orange: { bg: "#ffe8d9", text: "#c2540a" },
 };
 
 export function Badge({ label, tone }) {
