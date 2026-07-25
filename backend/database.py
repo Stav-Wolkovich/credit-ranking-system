@@ -45,6 +45,11 @@ Users columns are the fields the users page displays: id (username),
 full_name, email, active. user_roles links a user to the roles
 assigned to them (user_id, role_id). Roles columns are: id (code,
 e.g. RISK_MODEL_BUILDER), description.
+
+Matrices columns are the fields the matrices page displays: id (matrix
+code), name, type (e.g. רשת 2D), model_id (the model the matrix belongs
+to), axes, cells. get_all_matrices()/get_matrix() additionally join in
+model_name from the matching models row.
 """
 import sqlite3
 from datetime import date
@@ -148,6 +153,16 @@ SEED_USER_ROLE_LINKS = [
     ("david.shalom", "RISK_MODEL_BUILDER"),
     ("david.shalom", "RATING_ANALYST"),
     ("sarah.mizrahi", "META_DATA_ADMIN"),
+]
+
+SEED_MATRIX_ROWS = [
+    {"id": "BUDGET-MATRIX", "name": "מטריצת תקציב – סטיית הכנסות מול סטיית עלויות", "type": "רשת 2D", "model_id": "RE-PROJ", "axes": 2, "cells": 81},
+    {"id": "SALES-EXEC-MATRIX", "name": "מטריצת מכירות (השכרות) מול ביצוע", "type": "רשת 2D", "model_id": "RE-PROJ", "axes": 2, "cells": 121},
+    {"id": "COUNTRY-RISK-MATRIX", "name": "מטריצת סיכון מדינה – השפעה גבוהה", "type": "רשת 2D", "model_id": "RE-PROJ", "axes": 2, "cells": 324},
+    {"id": "TEST", "name": "טסט", "type": "רשת 2D", "model_id": "PROJ-FIN", "axes": 2, "cells": 1},
+    {"id": "TEST2", "name": "test 2", "type": "רשת 2D", "model_id": "RE-PROJ", "axes": 2, "cells": 4},
+    {"id": "TEST-3", "name": "TEST", "type": "רשת 2D", "model_id": "PROJ-FIN", "axes": 2, "cells": 24},
+    {"id": "TEST-CLONE", "name": "שכפול", "type": "רשת 2D", "model_id": "PROJ-FIN", "axes": 2, "cells": 20},
 ]
 
 
@@ -480,6 +495,29 @@ def init_db():
     if user_role_count == 0:
         conn.executemany(
             "INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", SEED_USER_ROLE_LINKS
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS matrices (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            model_id TEXT NOT NULL REFERENCES models(id),
+            axes INTEGER NOT NULL DEFAULT 2,
+            cells INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    matrix_count = conn.execute("SELECT COUNT(*) FROM matrices").fetchone()[0]
+    if matrix_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO matrices (id, name, type, model_id, axes, cells)
+            VALUES (:id, :name, :type, :model_id, :axes, :cells)
+            """,
+            SEED_MATRIX_ROWS,
         )
         conn.commit()
 
@@ -1126,4 +1164,99 @@ def update_user(
     conn.commit()
     conn.close()
     return get_user(id)
-    return get_questionnaire(new_id)
+
+
+def _attach_model_names(conn, matrices):
+    names_by_id = {
+        row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM models").fetchall()
+    }
+    for matrix in matrices:
+        matrix["model_name"] = names_by_id.get(matrix["model_id"])
+    return matrices
+
+
+def get_all_matrices():
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM matrices ORDER BY rowid ASC").fetchall()]
+    _attach_model_names(conn, rows)
+    conn.close()
+    return rows
+
+
+def count_matrices():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM matrices").fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_matrix(matrix_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM matrices WHERE id = ?", (matrix_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    matrix = dict(row)
+    _attach_model_names(conn, [matrix])
+    conn.close()
+    return matrix
+
+
+def matrix_code_taken(code: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM matrices WHERE id = ? AND id != ?", (code, exclude_id)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM matrices WHERE id = ?", (code,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def matrix_name_taken(name: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM matrices WHERE name = ? AND id != ?", (name, exclude_id)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM matrices WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_matrix(id: str, name: str, type: str, model_id: str, axes: int, cells: int):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO matrices (id, name, type, model_id, axes, cells) VALUES (?, ?, ?, ?, ?, ?)",
+        (id, name, type, model_id, axes, cells),
+    )
+    conn.commit()
+    conn.close()
+    return get_matrix(id)
+
+
+def update_matrix(
+    original_id: str, id: str, name: str, type: str, model_id: str, axes: int, cells: int
+):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE matrices SET id = ?, name = ?, type = ?, model_id = ?, axes = ?, cells = ? WHERE id = ?",
+        (id, name, type, model_id, axes, cells, original_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_matrix(id)
+
+
+def duplicate_matrix(source_id: str, new_id: str, new_name: str):
+    conn = get_connection()
+    source = conn.execute("SELECT * FROM matrices WHERE id = ?", (source_id,)).fetchone()
+    conn.execute(
+        "INSERT INTO matrices (id, name, type, model_id, axes, cells) VALUES (?, ?, ?, ?, ?, ?)",
+        (new_id, new_name, source["type"], source["model_id"], source["axes"], source["cells"]),
+    )
+    conn.commit()
+    conn.close()
+    return get_matrix(new_id)

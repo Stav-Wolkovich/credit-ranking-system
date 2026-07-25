@@ -114,6 +114,20 @@ class UserInput(BaseModel):
     role_ids: List[str] = []
 
 
+class MatrixInput(BaseModel):
+    id: str
+    name: str
+    type: str
+    model_id: str
+    axes: int = 2
+    cells: int = 0
+
+
+class MatrixDuplicateInput(BaseModel):
+    id: str
+    name: str
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -131,6 +145,7 @@ NAV_COUNTS = {
     "questionnaires": database.count_questionnaires,
     "approvals": lambda: database.count_rankings_by_status("ממתין לאישור"),
     "users": database.count_users,
+    "matrices": database.count_matrices,
 }
 
 
@@ -453,3 +468,70 @@ def update_user(user_id: str, payload: UserInput):
     if database.username_taken(cleaned["id"], exclude_id=user_id):
         raise HTTPException(status_code=409, detail="שם משתמש זה כבר קיים")
     return database.update_user(user_id, **cleaned)
+
+
+@app.get("/api/matrices")
+def get_matrices():
+    rows = database.get_all_matrices()
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "last_updated": date.today().isoformat(),
+    }
+
+
+def _clean_matrix_input(payload: MatrixInput):
+    matrix_id = payload.id.strip()
+    name = payload.name.strip()
+    type_ = payload.type.strip()
+    model_id = payload.model_id.strip()
+    if not matrix_id or not name or not type_ or not model_id:
+        raise HTTPException(status_code=422, detail="קוד, שם, סוג ומודל הם שדות חובה")
+    if not database.get_model(model_id):
+        raise HTTPException(status_code=422, detail="מודל לא נמצא")
+    return {
+        "id": matrix_id,
+        "name": name,
+        "type": type_,
+        "model_id": model_id,
+        "axes": payload.axes,
+        "cells": payload.cells,
+    }
+
+
+@app.post("/api/matrices", status_code=201)
+def create_matrix(payload: MatrixInput):
+    cleaned = _clean_matrix_input(payload)
+    if database.matrix_code_taken(cleaned["id"]):
+        raise HTTPException(status_code=409, detail="מטריצה עם קוד זה כבר קיימת")
+    if database.matrix_name_taken(cleaned["name"]):
+        raise HTTPException(status_code=409, detail="מטריצה עם שם זה כבר קיימת")
+    return database.create_matrix(**cleaned)
+
+
+@app.put("/api/matrices/{matrix_id}")
+def update_matrix(matrix_id: str, payload: MatrixInput):
+    if not database.get_matrix(matrix_id):
+        raise HTTPException(status_code=404, detail="מטריצה לא נמצאה")
+    cleaned = _clean_matrix_input(payload)
+    if database.matrix_code_taken(cleaned["id"], exclude_id=matrix_id):
+        raise HTTPException(status_code=409, detail="מטריצה עם קוד זה כבר קיימת")
+    if database.matrix_name_taken(cleaned["name"], exclude_id=matrix_id):
+        raise HTTPException(status_code=409, detail="מטריצה עם שם זה כבר קיימת")
+    return database.update_matrix(matrix_id, **cleaned)
+
+
+@app.post("/api/matrices/{matrix_id}/duplicate", status_code=201)
+def duplicate_matrix(matrix_id: str, payload: MatrixDuplicateInput):
+    source = database.get_matrix(matrix_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="מטריצה לא נמצאה")
+    new_id = payload.id.strip()
+    new_name = payload.name.strip()
+    if not new_id or not new_name:
+        raise HTTPException(status_code=422, detail="קוד ושם מטריצה הם שדות חובה")
+    if database.matrix_code_taken(new_id):
+        raise HTTPException(status_code=409, detail="מטריצה עם קוד זה כבר קיימת")
+    if database.matrix_name_taken(new_name):
+        raise HTTPException(status_code=409, detail="מטריצה עם שם זה כבר קיימת")
+    return database.duplicate_matrix(matrix_id, new_id, new_name)

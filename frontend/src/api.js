@@ -90,4 +90,20 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(user),
     }),
+  getMatrices: () => request("/matrices"),
+  createMatrix: (matrix) =>
+    request("/matrices", {
+      method: "POST",
+      body: JSON.stringify(matrix),
+    }),
+  updateMatrix: (id, matrix) =>
+    request(`/matrices/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(matrix),
+    }),
+  duplicateMatrix: (id, payload) =>
+    request(`/matrices/${id}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 };
