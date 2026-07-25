@@ -448,6 +448,10 @@ def get_all_rankings():
     return rows
 
 
+def get_rankings_by_status(status: str):
+    return [row for row in get_all_rankings() if row["status"] == status]
+
+
 def get_ranking(ranking_id: str):
     conn = get_connection()
     row = conn.execute("SELECT * FROM rankings WHERE id = ?", (ranking_id,)).fetchone()

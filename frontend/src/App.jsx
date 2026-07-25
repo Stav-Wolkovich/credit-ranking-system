@@ -8,6 +8,7 @@ import ProcessesPage from "./pages/ProcessesPage.jsx";
 import IssuersPage from "./pages/IssuersPage.jsx";
 import ModelsPage from "./pages/ModelsPage.jsx";
 import QuestionnairesPage from "./pages/QuestionnairesPage.jsx";
+import ApprovalsPage from "./pages/ApprovalsPage.jsx";
 
 const FALLBACK_NAV = [{ id: "report", label: "דוח דירוג פנימי", count: 12 }];
 
@@ -23,6 +24,8 @@ function PageContent({ page, navItems }) {
       return <ModelsPage />;
     case "questionnaires":
       return <QuestionnairesPage />;
+    case "approvals":
+      return <ApprovalsPage />;
     default: {
       const item = navItems.find((n) => n.id === page);
       return <PlaceholderPage label={item ? item.label : ""} />;

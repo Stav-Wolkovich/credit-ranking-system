@@ -119,6 +119,7 @@ NAV_COUNTS = {
     "issuers": database.count_issuers,
     "models": database.count_models,
     "questionnaires": database.count_questionnaires,
+    "approvals": lambda: database.count_rankings_by_status("ממתין לאישור"),
 }
 
 
@@ -131,11 +132,31 @@ def get_nav():
 
 
 @app.get("/api/report")
-def get_report(expiring_within_days: int = Query(default=60, ge=0)):
+def get_report():
     """Everything the main ranking-report page needs in one call."""
     return {
-        "summary": compute_summary(expiring_within_days),
+        "summary": compute_summary(),
         "rows": database.get_all_rankings(),
+    }
+
+
+@app.get("/api/report/expiring-soon")
+def get_expiring_soon(expiring_within_days: int = Query(default=60, ge=0)):
+    """Lightweight endpoint backing the customizable יפוגו תוך box, so
+    changing the day count doesn't refetch (and re-render) the whole page."""
+    return {
+        "expiring_soon": database.count_rankings_expiring_within(expiring_within_days),
+        "expiring_within_days": expiring_within_days,
+    }
+
+
+@app.get("/api/approvals")
+def get_approvals():
+    """Rankings currently sitting in the ממתין לאישור status."""
+    rows = database.get_rankings_by_status("ממתין לאישור")
+    return {
+        "rows": rows,
+        "total": len(rows),
     }
 
 

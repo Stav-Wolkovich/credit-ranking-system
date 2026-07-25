@@ -22,7 +22,8 @@ async function request(path, options = {}) {
 
 export const api = {
   getNav: () => request("/nav"),
-  getReport: (expiringWithinDays = 60) => request(`/report?expiring_within_days=${expiringWithinDays}`),
+  getReport: () => request("/report"),
+  getExpiringSoon: (expiringWithinDays) => request(`/report/expiring-soon?expiring_within_days=${expiringWithinDays}`),
   updateRowStatus: (id, status, tone) =>
     request(`/report/rows/${id}/status`, {
       method: "PATCH",
@@ -71,4 +72,5 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  getApprovals: () => request("/approvals"),
 };

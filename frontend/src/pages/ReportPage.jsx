@@ -26,21 +26,47 @@ export default function ReportPage() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expiringWithinDays, setExpiringWithinDays] = useState(60);
+  const [expiringSoon, setExpiringSoon] = useState(null);
+  const [expiringSoonLoading, setExpiringSoonLoading] = useState(true);
 
+  // Main page data — fetched once. Does NOT depend on expiringWithinDays,
+  // so changing that input never touches the table or the other stat boxes.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    api
+      .getReport()
+      .then((res) => {
+        if (!cancelled) setData(res);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Isolated fetch for just the יפוגו תוך box (runs on mount too, and every
+  // time the day count changes), so editing it only ever updates this one
+  // number — never the table or the other stat boxes.
+  useEffect(() => {
+    let cancelled = false;
+    setExpiringSoonLoading(true);
     const timer = setTimeout(() => {
       api
-        .getReport(expiringWithinDays)
+        .getExpiringSoon(expiringWithinDays)
         .then((res) => {
-          if (!cancelled) setData(res);
+          if (!cancelled) setExpiringSoon(res.expiring_soon);
         })
         .catch((err) => {
           if (!cancelled) setError(err.message);
         })
         .finally(() => {
-          if (!cancelled) setLoading(false);
+          if (!cancelled) setExpiringSoonLoading(false);
         });
     }, 400);
     return () => {
@@ -84,9 +110,9 @@ export default function ReportPage() {
               יום
             </span>
           }
-          value={summary?.expiring_soon}
+          value={expiringSoon}
           warn
-          loading={loading}
+          loading={expiringSoonLoading}
         />
         <StatCard label="ממתינים לאישור" value={summary?.awaiting_approval} loading={loading} />
         <StatCard label="בתהליך" value={summary?.in_progress} loading={loading} />
