@@ -5,6 +5,11 @@ Rankings columns are the fields the report page displays: id, status,
 tone (badge color), model, team, framework, kind, code, subject,
 approval_date (set once a ranking reaches "בתוקף"; used to flag
 rankings expiring within 60 days — i.e. approved 10+ months ago).
+get_all_rankings() additionally joins in final_score, final_rating,
+computed_score, computed_rating, and completion from the matching
+ranking_processes row (same id — a ranking and its process are the
+same תהליך, just displayed on two different pages), plus a
+valid_from/valid_until window derived from approval_date.
 
 Canonical ranking statuses: טיוטה, בעבודה, ממתין לאישור, הוחזר, מאושר,
 ממתין לוועדה, אושר ועדה, בתוקף, פג תוקף — plus the legacy בוטל/מושהה
@@ -12,7 +17,9 @@ still used by a couple of seed rows.
 
 Ranking Processes columns are the fields the processes page displays: id,
 subject, code, framework, status, tone, final_score, final_rating,
-completion.
+computed_score, computed_rating, completion. computed_* is the model's
+raw output; final_* is what was actually approved (a committee can
+approve a different rating than the one computed).
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active.
@@ -35,6 +42,7 @@ parameter_answers holds the ranked answer options for a parameter
 (parameter_id, text, position).
 """
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "rankings.db"
@@ -51,16 +59,16 @@ SEED_ROWS = [
 ]
 
 SEED_PROCESS_ROWS = [
-    {"id": "RP-2026-00031", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-34285", "framework": "Real Estate Development LOAN A, LLC 1002", "status": "בתהליך", "tone": "blue", "final_score": 1.00, "final_rating": "AAA", "completion": 0},
-    {"id": "RP-2026-00030", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-34285", "framework": "Real Estate Development LOAN A, LLC 1002", "status": "טיוטה", "tone": "gray", "final_score": None, "final_rating": None, "completion": 0},
-    {"id": "RP-2026-00025", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-33957", "framework": "TEST", "status": "אושר בוועדה", "tone": "green", "final_score": 3.28, "final_rating": "AA", "completion": 0},
-    {"id": "RP-2026-00024", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-34285", "framework": "Real Estate Development LOAN A, LLC 1002", "status": "בתהליך", "tone": "blue", "final_score": None, "final_rating": None, "completion": 0},
-    {"id": "RP-2026-00023", "subject": "Allianz Archimedes SUZIE INVESTMENT", "code": "LOAN-23967", "framework": "TEST1", "status": "בוטל", "tone": "red", "final_score": None, "final_rating": None, "completion": 0},
-    {"id": "RP-2026-00022", "subject": "WALL STREET 60", "code": "LOAN-23486", "framework": "טסט נופר", "status": "מושהה", "tone": "amber", "final_score": None, "final_rating": None, "completion": 0},
-    {"id": "RP-2026-00019", "subject": "ברקת מימון", "code": "LOAN-23903", "framework": "ברקת מימון פרויקט שמגר", "status": "בתוקף", "tone": "green", "final_score": 7.00, "final_rating": "A-", "completion": 0},
-    {"id": "RP-2026-00018", "subject": "אחים עופר ירושלים", "code": "LOAN-9904", "framework": "אחים עופר הלוואה - 01.06.21", "status": "בתוקף", "tone": "green", "final_score": 6.00, "final_rating": "A", "completion": 0},
-    {"id": "RP-2026-00017", "subject": "-", "code": "-", "framework": "-", "status": "טיוטה", "tone": "gray", "final_score": None, "final_rating": None, "completion": 0},
-    {"id": "RP-2026-00016", "subject": "בנק הפועלים", "code": "POLI-IL", "framework": "-", "status": "פיקטיבי", "tone": "amber", "final_score": None, "final_rating": None, "completion": 0},
+    {"id": "RP-2026-00031", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-34285", "framework": "Real Estate Development LOAN A, LLC 1002", "status": "בתהליך", "tone": "blue", "final_score": 1.00, "final_rating": "AAA", "computed_score": 1.00, "computed_rating": "AAA", "completion": 0},
+    {"id": "RP-2026-00030", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-34285", "framework": "Real Estate Development LOAN A, LLC 1002", "status": "טיוטה", "tone": "gray", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00025", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-33957", "framework": "TEST", "status": "אושר בוועדה", "tone": "green", "final_score": 3.28, "final_rating": "AA", "computed_score": 3.28, "computed_rating": "AA", "completion": 0},
+    {"id": "RP-2026-00024", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-34285", "framework": "Real Estate Development LOAN A, LLC 1002", "status": "בתהליך", "tone": "blue", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00023", "subject": "Allianz Archimedes SUZIE INVESTMENT", "code": "LOAN-23967", "framework": "TEST1", "status": "בוטל", "tone": "red", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00022", "subject": "WALL STREET 60", "code": "LOAN-23486", "framework": "טסט נופר", "status": "מושהה", "tone": "amber", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00019", "subject": "ברקת מימון", "code": "LOAN-23903", "framework": "ברקת מימון פרויקט שמגר", "status": "בתוקף", "tone": "green", "final_score": 7.00, "final_rating": "A-", "computed_score": 5.26, "computed_rating": "A+", "completion": 0},
+    {"id": "RP-2026-00018", "subject": "אחים עופר ירושלים", "code": "LOAN-9904", "framework": "אחים עופר הלוואה - 01.06.21", "status": "בתוקף", "tone": "green", "final_score": 6.00, "final_rating": "A", "computed_score": 3.07, "computed_rating": "AA", "completion": 0},
+    {"id": "RP-2026-00017", "subject": "-", "code": "-", "framework": "-", "status": "טיוטה", "tone": "gray", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00016", "subject": "בנק הפועלים", "code": "POLI-IL", "framework": "-", "status": "פיקטיבי", "tone": "amber", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
 ]
 
 SEED_ISSUER_ROWS = [
@@ -188,21 +196,42 @@ def init_db():
             tone TEXT NOT NULL,
             final_score REAL,
             final_rating TEXT,
+            computed_score REAL,
+            computed_rating TEXT,
             completion INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    process_columns = {row["name"] for row in conn.execute("PRAGMA table_info(ranking_processes)").fetchall()}
+    for column in ("computed_score", "computed_rating"):
+        if column not in process_columns:
+            ddl_type = "REAL" if column == "computed_score" else "TEXT"
+            conn.execute(f"ALTER TABLE ranking_processes ADD COLUMN {column} {ddl_type}")
     process_count = conn.execute("SELECT COUNT(*) FROM ranking_processes").fetchone()[0]
     if process_count == 0:
         conn.executemany(
             """
             INSERT INTO ranking_processes
-                (id, subject, code, framework, status, tone, final_score, final_rating, completion)
+                (id, subject, code, framework, status, tone, final_score, final_rating,
+                 computed_score, computed_rating, completion)
             VALUES
-                (:id, :subject, :code, :framework, :status, :tone, :final_score, :final_rating, :completion)
+                (:id, :subject, :code, :framework, :status, :tone, :final_score, :final_rating,
+                 :computed_score, :computed_rating, :completion)
             """,
             SEED_PROCESS_ROWS,
         )
+        conn.commit()
+    else:
+        # Backfill computed_score/computed_rating for rows created before
+        # these columns existed, without clobbering any later real edit.
+        for seed in SEED_PROCESS_ROWS:
+            conn.execute(
+                """
+                UPDATE ranking_processes SET computed_score = :computed_score, computed_rating = :computed_rating
+                WHERE id = :id AND computed_score IS NULL AND computed_rating IS NULL AND final_score IS NOT NULL
+                """,
+                seed,
+            )
         conn.commit()
 
     conn.execute(
@@ -379,11 +408,44 @@ def init_db():
     conn.close()
 
 
+def _add_one_year(d):
+    try:
+        return d.replace(year=d.year + 1)
+    except ValueError:
+        # Feb 29 on a source date with no Feb 29 the following year
+        return d.replace(year=d.year + 1, day=28)
+
+
 def get_all_rankings():
+    """Rankings joined with their matching תהליכי דירוג row (same id) for the
+    score/rating/completion columns, plus a validity window derived from
+    approval_date for בתוקף rankings."""
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM rankings ORDER BY id DESC").fetchall()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM rankings ORDER BY id DESC").fetchall()]
+    process_rows = conn.execute(
+        "SELECT id, final_score, final_rating, computed_score, computed_rating, completion FROM ranking_processes"
+    ).fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+
+    process_by_id = {p["id"]: dict(p) for p in process_rows}
+    for row in rows:
+        proc = process_by_id.get(row["id"])
+        row["final_score"] = proc["final_score"] if proc else None
+        row["final_rating"] = proc["final_rating"] if proc else None
+        row["computed_score"] = proc["computed_score"] if proc else None
+        row["computed_rating"] = proc["computed_rating"] if proc else None
+        row["completion"] = proc["completion"] if proc else 0
+
+        row["data_date"] = None  # not sourced from anywhere yet
+        if row["status"] == "בתוקף" and row["approval_date"]:
+            valid_from = date.fromisoformat(row["approval_date"])
+            valid_until = _add_one_year(valid_from)
+            row["valid_from"] = valid_from.strftime("%d/%m/%Y")
+            row["valid_until"] = valid_until.strftime("%d/%m/%Y")
+        else:
+            row["valid_from"] = None
+            row["valid_until"] = None
+    return rows
 
 
 def get_ranking(ranking_id: str):
@@ -436,8 +498,6 @@ def _months_elapsed(from_date, today):
 def count_rankings_expiring_soon(min_months_since_approval: int = 10):
     """Rankings that are בתוקף and were approved long enough ago that they're
     within 60 days of their (implied) 12-month expiry."""
-    from datetime import date
-
     today = date.today()
     conn = get_connection()
     rows = conn.execute(

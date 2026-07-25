@@ -2,7 +2,24 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, StatCard, PageHeader, ErrorBanner } from "../components/ui.jsx";
 
-const COLUMNS = ["סטטוס", "מודל", "צוות", "מסגרת", "סוג", "קוד", "נושא הדירוג", "מס' תהליך"];
+const COLUMNS = [
+  "סטטוס",
+  "מודל",
+  "צוות",
+  "ציון מחושב",
+  "דירוג מחושב",
+  "ציון סופי",
+  "דירוג סופי",
+  "השלמה",
+  "תוקף מ-",
+  "תוקף עד",
+  "תאריך נתונים",
+  "מסגרת",
+  "סוג",
+  "קוד",
+  "נושא הדירוג",
+  "מס' תהליך",
+];
 
 export default function ReportPage() {
   const [data, setData] = useState(null);
@@ -81,6 +98,14 @@ export default function ReportPage() {
                 </td>
                 <td style={{ padding: "12px 16px" }}>{r.model}</td>
                 <td style={{ padding: "12px 16px" }}>{r.team}</td>
+                <td style={{ padding: "12px 16px" }}>{r.computed_score ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.computed_rating ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.final_score ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.final_rating ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.completion}%</td>
+                <td style={{ padding: "12px 16px" }}>{r.valid_from ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.valid_until ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.data_date ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.framework}</td>
                 <td style={{ padding: "12px 16px" }}>{r.kind}</td>
                 <td style={{ padding: "12px 16px" }}>{r.code}</td>
