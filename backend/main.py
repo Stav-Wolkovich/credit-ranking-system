@@ -102,6 +102,18 @@ class QuestionnaireDuplicateInput(BaseModel):
     name: str
 
 
+class RoleInput(BaseModel):
+    id: str
+    description: Optional[str] = None
+
+
+class UserInput(BaseModel):
+    id: str
+    full_name: str
+    email: Optional[str] = None
+    role_ids: List[str] = []
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -118,6 +130,7 @@ NAV_COUNTS = {
     "models": database.count_models,
     "questionnaires": database.count_questionnaires,
     "approvals": lambda: database.count_rankings_by_status("ממתין לאישור"),
+    "users": database.count_users,
 }
 
 
@@ -383,3 +396,60 @@ def duplicate_questionnaire(questionnaire_id: str, payload: QuestionnaireDuplica
     return database.duplicate_questionnaire(
         questionnaire_id, new_id, new_name, created_date=date.today().strftime("%d/%m/%Y")
     )
+
+
+@app.get("/api/roles")
+def get_roles():
+    rows = database.get_all_roles()
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.post("/api/roles", status_code=201)
+def create_role(payload: RoleInput):
+    role_id = payload.id.strip()
+    if not role_id:
+        raise HTTPException(status_code=422, detail="קוד תפקיד הוא שדה חובה")
+    if database.role_code_taken(role_id):
+        raise HTTPException(status_code=409, detail="תפקיד עם קוד זה כבר קיים")
+    return database.create_role(role_id, (payload.description or "").strip() or None)
+
+
+@app.get("/api/users")
+def get_users():
+    rows = database.get_all_users()
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "last_updated": date.today().isoformat(),
+    }
+
+
+def _clean_user_input(payload: UserInput):
+    user_id = payload.id.strip()
+    full_name = payload.full_name.strip()
+    if not user_id or not full_name:
+        raise HTTPException(status_code=422, detail="שם משתמש ושם מלא הם שדות חובה")
+    return {
+        "id": user_id,
+        "full_name": full_name,
+        "email": (payload.email or "").strip() or None,
+        "role_ids": payload.role_ids,
+    }
+
+
+@app.post("/api/users", status_code=201)
+def create_user(payload: UserInput):
+    cleaned = _clean_user_input(payload)
+    if database.username_taken(cleaned["id"]):
+        raise HTTPException(status_code=409, detail="שם משתמש זה כבר קיים")
+    return database.create_user(**cleaned)
+
+
+@app.put("/api/users/{user_id}")
+def update_user(user_id: str, payload: UserInput):
+    if not database.get_user(user_id):
+        raise HTTPException(status_code=404, detail="משתמש לא נמצא")
+    cleaned = _clean_user_input(payload)
+    if database.username_taken(cleaned["id"], exclude_id=user_id):
+        raise HTTPException(status_code=409, detail="שם משתמש זה כבר קיים")
+    return database.update_user(user_id, **cleaned)

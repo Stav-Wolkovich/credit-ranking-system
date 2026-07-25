@@ -73,4 +73,21 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getApprovals: () => request("/approvals"),
+  getRoles: () => request("/roles"),
+  createRole: (role) =>
+    request("/roles", {
+      method: "POST",
+      body: JSON.stringify(role),
+    }),
+  getUsers: () => request("/users"),
+  createUser: (user) =>
+    request("/users", {
+      method: "POST",
+      body: JSON.stringify(user),
+    }),
+  updateUser: (id, user) =>
+    request(`/users/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(user),
+    }),
 };

@@ -40,6 +40,11 @@ questionnaire_parameters holds the scoring parameters that make up a
 questionnaire (questionnaire_id, name, type, weight, position).
 parameter_answers holds the ranked answer options for a parameter
 (parameter_id, text, position).
+
+Users columns are the fields the users page displays: id (username),
+full_name, email, active. user_roles links a user to the roles
+assigned to them (user_id, role_id). Roles columns are: id (code,
+e.g. RISK_MODEL_BUILDER), description.
 """
 import sqlite3
 from datetime import date
@@ -122,6 +127,27 @@ SEED_ANSWER_TEXTS = [
     "הרבה מתחת למחוצע בענף",
     "יחסים פיננסים ונתח שוק הרבה מתחת לממוצע",
     "יחסים פיננסים חלשים מאד נתח שוק זניח",
+]
+
+SEED_ROLE_ROWS = [
+    {"id": "RISK_MODEL_BUILDER", "description": None},
+    {"id": "META_DATA_ADMIN", "description": None},
+    {"id": "RATING_ANALYST", "description": None},
+]
+
+SEED_USER_ROWS = [
+    {"id": "nofar.torgeman", "full_name": "נופר טורגמן", "email": None, "active": True},
+    {"id": "david.shalom", "full_name": "דוד שלום", "email": None, "active": True},
+    {"id": "sarah.mizrahi", "full_name": "שרה מזרחי", "email": None, "active": True},
+    {"id": "revital.wolkovich", "full_name": "רוית וולקוביץ", "email": None, "active": True},
+]
+
+SEED_USER_ROLE_LINKS = [
+    ("nofar.torgeman", "RISK_MODEL_BUILDER"),
+    ("nofar.torgeman", "RATING_ANALYST"),
+    ("david.shalom", "RISK_MODEL_BUILDER"),
+    ("david.shalom", "RATING_ANALYST"),
+    ("sarah.mizrahi", "META_DATA_ADMIN"),
 ]
 
 
@@ -404,6 +430,59 @@ def init_db():
         )
         """
     )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roles (
+            id TEXT PRIMARY KEY,
+            description TEXT
+        )
+        """
+    )
+    role_count = conn.execute("SELECT COUNT(*) FROM roles").fetchone()[0]
+    if role_count == 0:
+        conn.executemany(
+            "INSERT INTO roles (id, description) VALUES (:id, :description)", SEED_ROLE_ROWS
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            full_name TEXT NOT NULL,
+            email TEXT,
+            active INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    if user_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO users (id, full_name, email, active)
+            VALUES (:id, :full_name, :email, :active)
+            """,
+            SEED_USER_ROWS,
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id TEXT NOT NULL REFERENCES users(id),
+            role_id TEXT NOT NULL REFERENCES roles(id),
+            PRIMARY KEY (user_id, role_id)
+        )
+        """
+    )
+    user_role_count = conn.execute("SELECT COUNT(*) FROM user_roles").fetchone()[0]
+    if user_role_count == 0:
+        conn.executemany(
+            "INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", SEED_USER_ROLE_LINKS
+        )
+        conn.commit()
+
     conn.commit()
     conn.close()
 
@@ -921,4 +1000,130 @@ def duplicate_questionnaire(source_id: str, new_id: str, new_name: str, created_
     _replace_questionnaire_parameters(conn, new_id, parameters)
     conn.commit()
     conn.close()
+
+
+def get_all_roles():
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM roles ORDER BY rowid ASC").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_role(role_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM roles WHERE id = ?", (role_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def count_roles():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM roles").fetchone()[0]
+    conn.close()
+    return count
+
+
+def role_code_taken(code: str):
+    conn = get_connection()
+    row = conn.execute("SELECT 1 FROM roles WHERE id = ?", (code,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_role(id: str, description: str | None):
+    conn = get_connection()
+    conn.execute("INSERT INTO roles (id, description) VALUES (?, ?)", (id, description))
+    conn.commit()
+    conn.close()
+    return get_role(id)
+
+
+def _attach_user_roles(conn, users):
+    links = conn.execute("SELECT user_id, role_id FROM user_roles").fetchall()
+    roles_by_user = {}
+    for link in links:
+        roles_by_user.setdefault(link["user_id"], []).append(link["role_id"])
+    for user in users:
+        user["role_ids"] = roles_by_user.get(user["id"], [])
+    return users
+
+
+def get_all_users():
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM users ORDER BY rowid ASC").fetchall()]
+    _attach_user_roles(conn, rows)
+    conn.close()
+    for row in rows:
+        row["active"] = bool(row["active"])
+    return rows
+
+
+def get_user(user_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    user = dict(row)
+    _attach_user_roles(conn, [user])
+    conn.close()
+    user["active"] = bool(user["active"])
+    return user
+
+
+def count_users():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    conn.close()
+    return count
+
+
+def username_taken(username: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE id = ? AND id != ?", (username, exclude_id)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM users WHERE id = ?", (username,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def _replace_user_roles(conn, user_id: str, role_ids: list[str]):
+    conn.execute("DELETE FROM user_roles WHERE user_id = ?", (user_id,))
+    if role_ids:
+        conn.executemany(
+            "INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)",
+            [(user_id, r) for r in role_ids],
+        )
+
+
+def create_user(id: str, full_name: str, email: str | None, role_ids: list[str] | None = None):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO users (id, full_name, email, active) VALUES (?, ?, ?, 1)",
+        (id, full_name, email),
+    )
+    _replace_user_roles(conn, id, role_ids or [])
+    conn.commit()
+    conn.close()
+    return get_user(id)
+
+
+def update_user(
+    original_id: str, id: str, full_name: str, email: str | None, role_ids: list[str] | None = None
+):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE users SET id = ?, full_name = ?, email = ? WHERE id = ?",
+        (id, full_name, email, original_id),
+    )
+    if original_id != id:
+        conn.execute("UPDATE user_roles SET user_id = ? WHERE user_id = ?", (id, original_id))
+    if role_ids is not None:
+        _replace_user_roles(conn, id, role_ids)
+    conn.commit()
+    conn.close()
+    return get_user(id)
     return get_questionnaire(new_id)
