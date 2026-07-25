@@ -28,13 +28,11 @@ app.add_middleware(
 
 
 NAV_ITEMS = [
-    {"id": "details", "label": "פירוט"},
     {"id": "report", "label": "דוח דירוג פנימי"},
     {"id": "processes", "label": "תהליכי דירוג"},
     {"id": "approvals", "label": "תור אישורים"},
     {"id": "issuers", "label": "מנפיקים"},
     {"id": "assets", "label": "נכסים"},
-    {"id": "master-data", "label": "נתוני אב"},
     {"id": "models", "label": "מודלים"},
     {"id": "questionnaires", "label": "שאלונים"},
     {"id": "matrices", "label": "מטריצות"},
