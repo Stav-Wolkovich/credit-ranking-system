@@ -25,25 +25,29 @@ export default function ReportPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [expiringWithinDays, setExpiringWithinDays] = useState(60);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    api
-      .getReport()
-      .then((res) => {
-        if (!cancelled) setData(res);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const timer = setTimeout(() => {
+      api
+        .getReport(expiringWithinDays)
+        .then((res) => {
+          if (!cancelled) setData(res);
+        })
+        .catch((err) => {
+          if (!cancelled) setError(err.message);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, 400);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, []);
+  }, [expiringWithinDays]);
 
   const summary = data?.summary;
   const rows = data?.rows ?? [];
@@ -59,7 +63,31 @@ export default function ReportPage() {
       {error && <ErrorBanner message={error} />}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 22 }}>
-        <StatCard label="יפוגו תוך 60 יום" value={summary?.expiring_in_60_days} warn loading={loading} />
+        <StatCard
+          label={
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              יפוגו תוך
+              <input
+                type="number"
+                min={0}
+                value={expiringWithinDays}
+                onChange={(e) => setExpiringWithinDays(Math.max(0, Number(e.target.value) || 0))}
+                style={{
+                  width: 46,
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  padding: "2px 4px",
+                  fontSize: 12.5,
+                  textAlign: "center",
+                }}
+              />
+              יום
+            </span>
+          }
+          value={summary?.expiring_soon}
+          warn
+          loading={loading}
+        />
         <StatCard label="ממתינים לאישור" value={summary?.awaiting_approval} loading={loading} />
         <StatCard label="בתהליך" value={summary?.in_progress} loading={loading} />
         <StatCard label="תהליכים בתוקף" value={summary?.in_force} loading={loading} />

@@ -488,16 +488,10 @@ def count_rankings_by_status(status: str):
     return count
 
 
-def _months_elapsed(from_date, today):
-    months = (today.year - from_date.year) * 12 + (today.month - from_date.month)
-    if today.day < from_date.day:
-        months -= 1
-    return months
-
-
-def count_rankings_expiring_soon(min_months_since_approval: int = 10):
-    """Rankings that are בתוקף and were approved long enough ago that they're
-    within 60 days of their (implied) 12-month expiry."""
+def count_rankings_expiring_within(days: int = 60):
+    """Rankings that are בתוקף and whose expiration (approval_date + 1 year)
+    falls within the given number of days from today (or has already
+    passed, which is still worth surfacing)."""
     today = date.today()
     conn = get_connection()
     rows = conn.execute(
@@ -507,7 +501,8 @@ def count_rankings_expiring_soon(min_months_since_approval: int = 10):
     count = 0
     for row in rows:
         approved = date.fromisoformat(row["approval_date"])
-        if _months_elapsed(approved, today) >= min_months_since_approval:
+        expiration = _add_one_year(approved)
+        if (expiration - today).days <= days:
             count += 1
     return count
 

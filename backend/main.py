@@ -5,7 +5,7 @@ Ranking data is persisted in SQLite (see database.py) rather than kept
 in-memory, so it survives restarts and can be queried/updated like a real
 data store.
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -45,9 +45,10 @@ NAV_ITEMS = [
 ]
 
 
-def compute_summary():
+def compute_summary(expiring_within_days: int = 60):
     return {
-        "expiring_in_60_days": database.count_rankings_expiring_soon(10),
+        "expiring_soon": database.count_rankings_expiring_within(expiring_within_days),
+        "expiring_within_days": expiring_within_days,
         "awaiting_approval": database.count_rankings_by_status("ממתין לאישור"),
         "in_progress": database.count_rankings_by_status("בעבודה"),
         "in_force": database.count_rankings_by_status("בתוקף"),
@@ -130,10 +131,10 @@ def get_nav():
 
 
 @app.get("/api/report")
-def get_report():
+def get_report(expiring_within_days: int = Query(default=60, ge=0)):
     """Everything the main ranking-report page needs in one call."""
     return {
-        "summary": compute_summary(),
+        "summary": compute_summary(expiring_within_days),
         "rows": database.get_all_rankings(),
     }
 
