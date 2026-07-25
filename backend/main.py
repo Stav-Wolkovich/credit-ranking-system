@@ -121,6 +121,12 @@ class MatrixInput(BaseModel):
     model_id: str
     axes: int = 2
     cells: int = 0
+    description: Optional[str] = None
+    x_axis_label: Optional[str] = None
+    y_axis_label: Optional[str] = None
+    x_values: List[str] = []
+    y_values: List[str] = []
+    cell_values: List[List[float]] = []
 
 
 class MatrixDuplicateInput(BaseModel):
@@ -480,6 +486,14 @@ def get_matrices():
     }
 
 
+@app.get("/api/matrices/{matrix_id}")
+def get_matrix(matrix_id: str):
+    matrix = database.get_matrix(matrix_id)
+    if not matrix:
+        raise HTTPException(status_code=404, detail="מטריצה לא נמצאה")
+    return matrix
+
+
 def _clean_matrix_input(payload: MatrixInput):
     matrix_id = payload.id.strip()
     name = payload.name.strip()
@@ -489,6 +503,14 @@ def _clean_matrix_input(payload: MatrixInput):
         raise HTTPException(status_code=422, detail="קוד, שם, סוג ומודל הם שדות חובה")
     if not database.get_model(model_id):
         raise HTTPException(status_code=422, detail="מודל לא נמצא")
+    x_values = [v.strip() for v in payload.x_values if v.strip()]
+    y_values = [v.strip() for v in payload.y_values if v.strip()]
+    cell_values = payload.cell_values
+    if x_values and y_values:
+        if len(cell_values) != len(y_values) or any(len(row) != len(x_values) for row in cell_values):
+            raise HTTPException(status_code=422, detail="מספר התאים אינו תואם לצירים שהוגדרו")
+    else:
+        x_values, y_values, cell_values = [], [], []
     return {
         "id": matrix_id,
         "name": name,
@@ -496,6 +518,12 @@ def _clean_matrix_input(payload: MatrixInput):
         "model_id": model_id,
         "axes": payload.axes,
         "cells": payload.cells,
+        "description": (payload.description or "").strip() or None,
+        "x_axis_label": (payload.x_axis_label or "").strip() or None,
+        "y_axis_label": (payload.y_axis_label or "").strip() or None,
+        "x_values": x_values,
+        "y_values": y_values,
+        "cell_values": cell_values,
     }
 
 

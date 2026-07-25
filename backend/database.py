@@ -48,8 +48,15 @@ e.g. RISK_MODEL_BUILDER), description.
 
 Matrices columns are the fields the matrices page displays: id (matrix
 code), name, type (e.g. רשת 2D), model_id (the model the matrix belongs
-to), axes, cells. get_all_matrices()/get_matrix() additionally join in
-model_name from the matching models row.
+to), axes, cells, description, x_axis_label, y_axis_label.
+get_all_matrices()/get_matrix() additionally join in model_name from the
+matching models row. matrix_axis_values holds the ordered labels for
+each axis (matrix_id, axis 'x'/'y', position, label); matrix_cells holds
+the actual grid values (matrix_id, row_position, col_position, value).
+get_matrix() attaches x_values/y_values (ordered label lists) and
+cell_values (a row_position-major 2D array) when a grid has been
+defined; cells is derived from len(x_values) * len(y_values) once a
+grid exists, otherwise it stays a manually entered count.
 """
 import sqlite3
 from datetime import date
@@ -506,10 +513,17 @@ def init_db():
             type TEXT NOT NULL,
             model_id TEXT NOT NULL REFERENCES models(id),
             axes INTEGER NOT NULL DEFAULT 2,
-            cells INTEGER NOT NULL DEFAULT 0
+            cells INTEGER NOT NULL DEFAULT 0,
+            description TEXT,
+            x_axis_label TEXT,
+            y_axis_label TEXT
         )
         """
     )
+    matrix_columns = {row["name"] for row in conn.execute("PRAGMA table_info(matrices)").fetchall()}
+    for col in ("description", "x_axis_label", "y_axis_label"):
+        if col not in matrix_columns:
+            conn.execute(f"ALTER TABLE matrices ADD COLUMN {col} TEXT")
     matrix_count = conn.execute("SELECT COUNT(*) FROM matrices").fetchone()[0]
     if matrix_count == 0:
         conn.executemany(
@@ -521,8 +535,72 @@ def init_db():
         )
         conn.commit()
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS matrix_axis_values (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            matrix_id TEXT NOT NULL REFERENCES matrices(id),
+            axis TEXT NOT NULL CHECK (axis IN ('x', 'y')),
+            position INTEGER NOT NULL,
+            label TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS matrix_cells (
+            matrix_id TEXT NOT NULL REFERENCES matrices(id),
+            row_position INTEGER NOT NULL,
+            col_position INTEGER NOT NULL,
+            value REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (matrix_id, row_position, col_position)
+        )
+        """
+    )
+    _seed_budget_matrix_grid(conn)
+
     conn.commit()
     conn.close()
+
+
+def _seed_budget_matrix_grid(conn):
+    """Seeds the real axis/cell data for BUDGET-MATRIX shown in the reference
+    screenshot: value = (income deviation % - cost deviation %) / 100."""
+    already_seeded = conn.execute(
+        "SELECT COUNT(*) FROM matrix_axis_values WHERE matrix_id = ?", ("BUDGET-MATRIX",)
+    ).fetchone()[0]
+    if already_seeded:
+        return
+    x_pcts = [-20, -15, -10, -5, 0, 5, 10, 15, 20]
+    y_pcts = [20, 15, 10, 5, 0, -5, -10, -15, -20]
+    x_labels = [f"{p}%" if p <= 0 else f"+{p}%" for p in x_pcts]
+    y_labels = [f"{p}%" if p <= 0 else f"+{p}%" for p in y_pcts]
+    conn.execute(
+        "UPDATE matrices SET description = ?, x_axis_label = ?, y_axis_label = ? WHERE id = ?",
+        (
+            "חיתוך סטיית הכנסות (ציר אופקי) מול סטיית עלויות (ציר אנכי). ציון חיובי = הרעה, שלילי = שיפור.",
+            "סטיית הכנסות",
+            "סטיית עלויות",
+            "BUDGET-MATRIX",
+        ),
+    )
+    conn.executemany(
+        "INSERT INTO matrix_axis_values (matrix_id, axis, position, label) VALUES (?, 'x', ?, ?)",
+        [("BUDGET-MATRIX", i, label) for i, label in enumerate(x_labels)],
+    )
+    conn.executemany(
+        "INSERT INTO matrix_axis_values (matrix_id, axis, position, label) VALUES (?, 'y', ?, ?)",
+        [("BUDGET-MATRIX", i, label) for i, label in enumerate(y_labels)],
+    )
+    cell_rows = [
+        ("BUDGET-MATRIX", row_pos, col_pos, round((x_pct - y_pct) / 100, 2))
+        for row_pos, y_pct in enumerate(y_pcts)
+        for col_pos, x_pct in enumerate(x_pcts)
+    ]
+    conn.executemany(
+        "INSERT INTO matrix_cells (matrix_id, row_position, col_position, value) VALUES (?, ?, ?, ?)",
+        cell_rows,
+    )
 
 
 def _add_one_year(d):
@@ -1190,6 +1268,37 @@ def count_matrices():
     return count
 
 
+def _attach_grid(conn, matrix):
+    x_values = [
+        r["label"]
+        for r in conn.execute(
+            "SELECT label FROM matrix_axis_values WHERE matrix_id = ? AND axis = 'x' ORDER BY position ASC",
+            (matrix["id"],),
+        ).fetchall()
+    ]
+    y_values = [
+        r["label"]
+        for r in conn.execute(
+            "SELECT label FROM matrix_axis_values WHERE matrix_id = ? AND axis = 'y' ORDER BY position ASC",
+            (matrix["id"],),
+        ).fetchall()
+    ]
+    matrix["x_values"] = x_values
+    matrix["y_values"] = y_values
+    if x_values and y_values:
+        grid = [[0] * len(x_values) for _ in y_values]
+        for r in conn.execute(
+            "SELECT row_position, col_position, value FROM matrix_cells WHERE matrix_id = ?",
+            (matrix["id"],),
+        ).fetchall():
+            if r["row_position"] < len(y_values) and r["col_position"] < len(x_values):
+                grid[r["row_position"]][r["col_position"]] = r["value"]
+        matrix["cell_values"] = grid
+    else:
+        matrix["cell_values"] = []
+    return matrix
+
+
 def get_matrix(matrix_id: str):
     conn = get_connection()
     row = conn.execute("SELECT * FROM matrices WHERE id = ?", (matrix_id,)).fetchone()
@@ -1198,6 +1307,7 @@ def get_matrix(matrix_id: str):
         return None
     matrix = dict(row)
     _attach_model_names(conn, [matrix])
+    _attach_grid(conn, matrix)
     conn.close()
     return matrix
 
@@ -1226,25 +1336,95 @@ def matrix_name_taken(name: str, exclude_id: str | None = None):
     return row is not None
 
 
-def create_matrix(id: str, name: str, type: str, model_id: str, axes: int, cells: int):
+def _replace_matrix_grid(
+    conn, matrix_id: str, x_values: list[str], y_values: list[str], cell_values: list[list[float]]
+):
+    conn.execute("DELETE FROM matrix_axis_values WHERE matrix_id = ?", (matrix_id,))
+    conn.execute("DELETE FROM matrix_cells WHERE matrix_id = ?", (matrix_id,))
+    if x_values:
+        conn.executemany(
+            "INSERT INTO matrix_axis_values (matrix_id, axis, position, label) VALUES (?, 'x', ?, ?)",
+            [(matrix_id, i, label) for i, label in enumerate(x_values)],
+        )
+    if y_values:
+        conn.executemany(
+            "INSERT INTO matrix_axis_values (matrix_id, axis, position, label) VALUES (?, 'y', ?, ?)",
+            [(matrix_id, i, label) for i, label in enumerate(y_values)],
+        )
+    if x_values and y_values and cell_values:
+        cell_rows = [
+            (matrix_id, r, c, cell_values[r][c])
+            for r in range(len(y_values))
+            for c in range(len(x_values))
+        ]
+        conn.executemany(
+            "INSERT INTO matrix_cells (matrix_id, row_position, col_position, value) VALUES (?, ?, ?, ?)",
+            cell_rows,
+        )
+
+
+def create_matrix(
+    id: str,
+    name: str,
+    type: str,
+    model_id: str,
+    axes: int,
+    cells: int,
+    description: str | None = None,
+    x_axis_label: str | None = None,
+    y_axis_label: str | None = None,
+    x_values: list[str] | None = None,
+    y_values: list[str] | None = None,
+    cell_values: list[list[float]] | None = None,
+):
+    x_values = x_values or []
+    y_values = y_values or []
+    final_cells = len(x_values) * len(y_values) if x_values and y_values else cells
     conn = get_connection()
     conn.execute(
-        "INSERT INTO matrices (id, name, type, model_id, axes, cells) VALUES (?, ?, ?, ?, ?, ?)",
-        (id, name, type, model_id, axes, cells),
+        """
+        INSERT INTO matrices (id, name, type, model_id, axes, cells, description, x_axis_label, y_axis_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (id, name, type, model_id, axes, final_cells, description, x_axis_label, y_axis_label),
     )
+    _replace_matrix_grid(conn, id, x_values, y_values, cell_values or [])
     conn.commit()
     conn.close()
     return get_matrix(id)
 
 
 def update_matrix(
-    original_id: str, id: str, name: str, type: str, model_id: str, axes: int, cells: int
+    original_id: str,
+    id: str,
+    name: str,
+    type: str,
+    model_id: str,
+    axes: int,
+    cells: int,
+    description: str | None = None,
+    x_axis_label: str | None = None,
+    y_axis_label: str | None = None,
+    x_values: list[str] | None = None,
+    y_values: list[str] | None = None,
+    cell_values: list[list[float]] | None = None,
 ):
+    x_values = x_values or []
+    y_values = y_values or []
+    final_cells = len(x_values) * len(y_values) if x_values and y_values else cells
     conn = get_connection()
     conn.execute(
-        "UPDATE matrices SET id = ?, name = ?, type = ?, model_id = ?, axes = ?, cells = ? WHERE id = ?",
-        (id, name, type, model_id, axes, cells, original_id),
+        """
+        UPDATE matrices SET id = ?, name = ?, type = ?, model_id = ?, axes = ?, cells = ?,
+            description = ?, x_axis_label = ?, y_axis_label = ?
+        WHERE id = ?
+        """,
+        (id, name, type, model_id, axes, final_cells, description, x_axis_label, y_axis_label, original_id),
     )
+    if original_id != id:
+        conn.execute("UPDATE matrix_axis_values SET matrix_id = ? WHERE matrix_id = ?", (id, original_id))
+        conn.execute("UPDATE matrix_cells SET matrix_id = ? WHERE matrix_id = ?", (id, original_id))
+    _replace_matrix_grid(conn, id, x_values, y_values, cell_values or [])
     conn.commit()
     conn.close()
     return get_matrix(id)
@@ -1254,9 +1434,48 @@ def duplicate_matrix(source_id: str, new_id: str, new_name: str):
     conn = get_connection()
     source = conn.execute("SELECT * FROM matrices WHERE id = ?", (source_id,)).fetchone()
     conn.execute(
-        "INSERT INTO matrices (id, name, type, model_id, axes, cells) VALUES (?, ?, ?, ?, ?, ?)",
-        (new_id, new_name, source["type"], source["model_id"], source["axes"], source["cells"]),
+        """
+        INSERT INTO matrices (id, name, type, model_id, axes, cells, description, x_axis_label, y_axis_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            new_id,
+            new_name,
+            source["type"],
+            source["model_id"],
+            source["axes"],
+            source["cells"],
+            source["description"],
+            source["x_axis_label"],
+            source["y_axis_label"],
+        ),
     )
+    x_rows = conn.execute(
+        "SELECT position, label FROM matrix_axis_values WHERE matrix_id = ? AND axis = 'x' ORDER BY position ASC",
+        (source_id,),
+    ).fetchall()
+    y_rows = conn.execute(
+        "SELECT position, label FROM matrix_axis_values WHERE matrix_id = ? AND axis = 'y' ORDER BY position ASC",
+        (source_id,),
+    ).fetchall()
+    if x_rows:
+        conn.executemany(
+            "INSERT INTO matrix_axis_values (matrix_id, axis, position, label) VALUES (?, 'x', ?, ?)",
+            [(new_id, r["position"], r["label"]) for r in x_rows],
+        )
+    if y_rows:
+        conn.executemany(
+            "INSERT INTO matrix_axis_values (matrix_id, axis, position, label) VALUES (?, 'y', ?, ?)",
+            [(new_id, r["position"], r["label"]) for r in y_rows],
+        )
+    cell_rows = conn.execute(
+        "SELECT row_position, col_position, value FROM matrix_cells WHERE matrix_id = ?", (source_id,)
+    ).fetchall()
+    if cell_rows:
+        conn.executemany(
+            "INSERT INTO matrix_cells (matrix_id, row_position, col_position, value) VALUES (?, ?, ?, ?)",
+            [(new_id, r["row_position"], r["col_position"], r["value"]) for r in cell_rows],
+        )
     conn.commit()
     conn.close()
     return get_matrix(new_id)

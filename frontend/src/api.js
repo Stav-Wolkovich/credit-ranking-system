@@ -91,6 +91,7 @@ export const api = {
       body: JSON.stringify(user),
     }),
   getMatrices: () => request("/matrices"),
+  getMatrix: (id) => request(`/matrices/${id}`),
   createMatrix: (matrix) =>
     request("/matrices", {
       method: "POST",
