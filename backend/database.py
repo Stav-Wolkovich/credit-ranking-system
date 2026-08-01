@@ -2,37 +2,70 @@
 SQLite data access for the Rankings and Ranking Processes tables.
 
 Rankings columns are the fields the report page displays: id, status,
-tone (badge color), model, team, framework, kind, code, subject,
-approval_date (set once a ranking reaches "בתוקף"; used to flag
-rankings expiring within 60 days — i.e. approved 10+ months ago).
-get_all_rankings() additionally joins in final_score, final_rating,
-computed_score, computed_rating, and completion from the matching
-ranking_processes row (same id — a ranking and its process are the
-same תהליך, just displayed on two different pages), plus a
-valid_from/valid_until window derived from approval_date.
+tone (badge color), model_id (a models.id), team_id (a teams.id),
+framework_issuer_id and subject_issuer_id (both issuers.id — the ranked
+entity and the credit facility/framework it's ranked under are both
+modeled as issuers), kind, code, approval_date (set once a ranking
+reaches "בתוקף"; used to flag rankings expiring within 60 days — i.e.
+approved 10+ months ago). get_all_rankings()/get_ranking() additionally
+join in a display "model" string (name + active_version) from model_id,
+a "team" display name from team_id, and "framework"/"subject" display
+names from framework_issuer_id/subject_issuer_id, so renaming a model,
+team, or issuer is reflected everywhere it's ranked. get_all_rankings()
+also joins in final_score, final_rating, computed_score, computed_rating,
+and completion from the matching ranking_processes row (same id — a
+ranking and its process are the same תהליך, just displayed on two
+different pages), plus a valid_from/valid_until window derived from
+approval_date.
 
 Canonical ranking statuses: טיוטה, בעבודה, ממתין לאישור, הוחזר, מאושר,
 ממתין לוועדה, אושר ועדה, בתוקף, פג תוקף — plus the legacy בוטל/מושהה
 still used by a couple of seed rows.
 
 Ranking Processes columns are the fields the processes page displays: id,
-subject, code, framework, status, tone, final_score, final_rating,
-computed_score, computed_rating, completion. computed_* is the model's
-raw output; final_* is what was actually approved (a committee can
-approve a different rating than the one computed).
+subject_issuer_id, code, framework_issuer_id, status, tone, final_score,
+final_rating, computed_score, computed_rating, completion — same
+issuer-linked subject/framework as rankings, joined the same way by
+get_all_processes(). computed_* is the model's raw output; final_* is
+what was actually approved (a committee can approve a different rating
+than the one computed).
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active.
 
+Teams columns are the fields the teams page displays: id (team code),
+name, type, process_kind (the ranking process type the team runs, e.g.
+FULL/LITE), committee_submission and validity_tracking (both booleans),
+active.
+
+Assets columns are the fields the assets page displays: id (asset
+code), name, type, issuer_id (the issuer that owns the asset), cycle_stage
+(בסיס / היתכנות, הקמה, הפעלה, or None), active. get_all_assets()/get_asset()
+additionally join in issuer_name from the matching issuers row.
+
 Models columns are the fields the models page displays: id (model
-code), name, family, domain, owner, active_version, versions_count,
-segments_count, questionnaires_count, status, tone, last_updated,
-description. questionnaires_count is computed from the
-model_questionnaires join table rather than stored.
+code), name, family, domain, owner (a users.id, not a display name),
+active_version, versions_count, segments_count, questionnaires_count,
+status, tone, last_updated, description. questionnaires_count is computed
+from the model_questionnaires join table rather than stored.
+get_all_models()/get_model() additionally join in owner_name from the
+matching users row, so renaming a user updates every model they own.
+models.rating_scale_id (a rating_scales.id) is the rating scale used to
+translate that model's computed numeric score into a rating string;
+get_all_models()/get_model() join in rating_scale_name for display.
+
+Rating scales columns are the fields the rating scales page displays: id
+(scale code), name, description. rating_scale_levels holds the ordered
+label/range triples that make up a scale (rating_scale_id, label — e.g.
+AAA/AA/A — min_value/max_value — the numeric score range that maps to
+that label — position).
 
 Questionnaires columns are the fields the questionnaires page displays:
 id (code), name, calculation_method, type (מערכת/מותאם), status, tone,
-version, description, created_date, created_by. model_questionnaires
+version, description, created_date, created_by (a users.id, not a display
+name). get_all_questionnaires()/get_questionnaire() additionally join in
+created_by_name from the matching users row, so renaming a user updates
+every questionnaire they created. model_questionnaires
 links a model to the questionnaires assigned to it (model_id,
 questionnaire_id).
 
@@ -58,6 +91,7 @@ cell_values (a row_position-major 2D array) when a grid has been
 defined; cells is derived from len(x_values) * len(y_values) once a
 grid exists, otherwise it stays a manually entered count.
 """
+import re
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -65,61 +99,98 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent / "rankings.db"
 
 SEED_ROWS = [
-    {"id": "RP-2026-00031", "status": "ממתין לאישור", "tone": "amber", "model": "תאגידים ישראל v2", "team": "צוות השקעות", "framework": "Real Estate Development LOAN A, LLC 1002", "kind": "מנפיק", "code": "LOAN-34285", "subject": "חשבון מנוהל - Fuse Funding", "approval_date": None},
-    {"id": "RP-2026-00030", "status": "טיוטה", "tone": "gray", "model": "תחנות כוח v1", "team": "צוות השקעות", "framework": "Real Estate Development LOAN A, LLC 1002", "kind": "מנפיק", "code": "LOAN-34285", "subject": "חשבון מנוהל - Fuse Funding", "approval_date": None},
-    {"id": "RP-2026-00025", "status": "אושר ועדה", "tone": "green", "model": "תאגידים ישראל v2", "team": "צוות השקעות", "framework": "TEST", "kind": "נכס", "code": "LOAN-33957", "subject": "חשבון מנוהל - Fuse Funding", "approval_date": "2026-06-01"},
-    {"id": "RP-2026-00024", "status": "בעבודה", "tone": "blue", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "Real Estate Development LOAN A, LLC 1002", "kind": "נכס", "code": "LOAN-34285", "subject": "חשבון מנוהל - Fuse Funding", "approval_date": None},
-    {"id": "RP-2026-00023", "status": "בוטל", "tone": "red", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "TEST1", "kind": "נכס", "code": "LOAN-23967", "subject": "Allianz Archimedes SUZIE INVESTMENT", "approval_date": None},
-    {"id": "RP-2026-00022", "status": "מושהה", "tone": "amber", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "טסט נופר", "kind": "נכס", "code": "LOAN-23486", "subject": "WALL STREET 60", "approval_date": None},
-    {"id": "RP-2026-00019", "status": "בתוקף", "tone": "green", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "ברקת מימון פרויקט שמגר", "kind": "נכס", "code": "LOAN-23903", "subject": "ברקת מימון", "approval_date": "2025-08-15"},
-    {"id": "RP-2026-00018", "status": "בתוקף", "tone": "green", "model": "דירוג פרויקט נדל\"ן יזמי v1", "team": "צוות השקעות", "framework": "אחים עופר הלוואה - 01.06.21", "kind": "נכס", "code": "LOAN-9904", "subject": "אחים עופר ירושלים", "approval_date": "2026-05-10"},
+    {"id": "RP-2026-00031", "status": "ממתין לאישור", "tone": "amber", "model_id": "CORP-IL", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "מנפיק", "code": "LOAN-34285", "subject_issuer_id": "10000380", "approval_date": None},
+    {"id": "RP-2026-00030", "status": "טיוטה", "tone": "gray", "model_id": "REAL-EST", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "מנפיק", "code": "LOAN-34285", "subject_issuer_id": "10000380", "approval_date": None},
+    {"id": "RP-2026-00025", "status": "אושר ועדה", "tone": "green", "model_id": "CORP-IL", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "נכס", "code": "LOAN-33957", "subject_issuer_id": "10000380", "approval_date": "2026-06-01"},
+    {"id": "RP-2026-00024", "status": "בעבודה", "tone": "blue", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "נכס", "code": "LOAN-34285", "subject_issuer_id": "10000380", "approval_date": None},
+    {"id": "RP-2026-00023", "status": "בוטל", "tone": "red", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000399", "kind": "נכס", "code": "LOAN-23967", "subject_issuer_id": "10000399", "approval_date": None},
+    {"id": "RP-2026-00022", "status": "מושהה", "tone": "amber", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000364", "kind": "נכס", "code": "LOAN-23486", "subject_issuer_id": "10000364", "approval_date": None},
+    {"id": "RP-2026-00019", "status": "בתוקף", "tone": "green", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000479", "kind": "נכס", "code": "LOAN-23903", "subject_issuer_id": "10000479", "approval_date": "2025-08-15"},
+    {"id": "RP-2026-00018", "status": "בתוקף", "tone": "green", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000365", "kind": "נכס", "code": "LOAN-9904", "subject_issuer_id": "10000365", "approval_date": "2026-05-10"},
+]
+
+SEED_TEAM_ROWS = [
+    {"id": "INV-TEAM", "name": "צוות השקעות", "type": None, "process_kind": None, "committee_submission": False, "validity_tracking": False, "active": True},
+    {"id": "RISK-TEAM", "name": "צוות ניהול סיכונים", "type": None, "process_kind": None, "committee_submission": False, "validity_tracking": False, "active": True},
 ]
 
 SEED_PROCESS_ROWS = [
-    {"id": "RP-2026-00031", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-34285", "framework": "Real Estate Development LOAN A, LLC 1002", "status": "בתהליך", "tone": "blue", "final_score": 1.00, "final_rating": "AAA", "computed_score": 1.00, "computed_rating": "AAA", "completion": 0},
-    {"id": "RP-2026-00030", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-34285", "framework": "Real Estate Development LOAN A, LLC 1002", "status": "טיוטה", "tone": "gray", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
-    {"id": "RP-2026-00025", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-33957", "framework": "TEST", "status": "אושר בוועדה", "tone": "green", "final_score": 3.28, "final_rating": "AA", "computed_score": 3.28, "computed_rating": "AA", "completion": 0},
-    {"id": "RP-2026-00024", "subject": "חשבון מנוהל - Fuse Funding", "code": "LOAN-34285", "framework": "Real Estate Development LOAN A, LLC 1002", "status": "בתהליך", "tone": "blue", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
-    {"id": "RP-2026-00023", "subject": "Allianz Archimedes SUZIE INVESTMENT", "code": "LOAN-23967", "framework": "TEST1", "status": "בוטל", "tone": "red", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
-    {"id": "RP-2026-00022", "subject": "WALL STREET 60", "code": "LOAN-23486", "framework": "טסט נופר", "status": "מושהה", "tone": "amber", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
-    {"id": "RP-2026-00019", "subject": "ברקת מימון", "code": "LOAN-23903", "framework": "ברקת מימון פרויקט שמגר", "status": "בתוקף", "tone": "green", "final_score": 7.00, "final_rating": "A-", "computed_score": 5.26, "computed_rating": "A+", "completion": 0},
-    {"id": "RP-2026-00018", "subject": "אחים עופר ירושלים", "code": "LOAN-9904", "framework": "אחים עופר הלוואה - 01.06.21", "status": "בתוקף", "tone": "green", "final_score": 6.00, "final_rating": "A", "computed_score": 3.07, "computed_rating": "AA", "completion": 0},
-    {"id": "RP-2026-00017", "subject": "-", "code": "-", "framework": "-", "status": "טיוטה", "tone": "gray", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
-    {"id": "RP-2026-00016", "subject": "בנק הפועלים", "code": "POLI-IL", "framework": "-", "status": "פיקטיבי", "tone": "amber", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00031", "subject_issuer_id": "10000380", "code": "LOAN-34285", "framework_issuer_id": "10000380", "status": "בתהליך", "tone": "blue", "final_score": 1.00, "final_rating": "AAA", "computed_score": 1.00, "computed_rating": "AAA", "completion": 0},
+    {"id": "RP-2026-00030", "subject_issuer_id": "10000380", "code": "LOAN-34285", "framework_issuer_id": "10000380", "status": "טיוטה", "tone": "gray", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00025", "subject_issuer_id": "10000380", "code": "LOAN-33957", "framework_issuer_id": "10000380", "status": "אושר בוועדה", "tone": "green", "final_score": 3.28, "final_rating": "AA", "computed_score": 3.28, "computed_rating": "AA", "completion": 0},
+    {"id": "RP-2026-00024", "subject_issuer_id": "10000380", "code": "LOAN-34285", "framework_issuer_id": "10000380", "status": "בתהליך", "tone": "blue", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00023", "subject_issuer_id": "10000399", "code": "LOAN-23967", "framework_issuer_id": "10000399", "status": "בוטל", "tone": "red", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00022", "subject_issuer_id": "10000364", "code": "LOAN-23486", "framework_issuer_id": "10000364", "status": "מושהה", "tone": "amber", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00019", "subject_issuer_id": "10000479", "code": "LOAN-23903", "framework_issuer_id": "10000479", "status": "בתוקף", "tone": "green", "final_score": 7.00, "final_rating": "A-", "computed_score": 5.26, "computed_rating": "A+", "completion": 0},
+    {"id": "RP-2026-00018", "subject_issuer_id": "10000365", "code": "LOAN-9904", "framework_issuer_id": "10000365", "status": "בתוקף", "tone": "green", "final_score": 6.00, "final_rating": "A", "computed_score": 3.07, "computed_rating": "AA", "completion": 0},
+    {"id": "RP-2026-00017", "subject_issuer_id": None, "code": "-", "framework_issuer_id": None, "status": "טיוטה", "tone": "gray", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
+    {"id": "RP-2026-00016", "subject_issuer_id": "10000484", "code": "POLI-IL", "framework_issuer_id": None, "status": "פיקטיבי", "tone": "amber", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
 ]
 
 SEED_ISSUER_ROWS = [
-    {"id": "10000364", "name": "WALL STREET 60", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000399", "name": "Allianz Archimedes SUZIE INVESTMENT", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000479", "name": "Allianz – Centinela", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000365", "name": "Allianz euNetworks Holdings Limited", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000484", "name": "Allianz - Financiere Vendome II Diam Coc (EPC 3)", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000366", "name": "Allianz - Porterbrook Ulfstead Midco Limited", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000367", "name": "Allianz - project hercules", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000368", "name": "Allianz - Project Runde", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000530", "name": "Allianz - Rotera TRENDBELL DESIGNATED ACTIVITY COMPANY", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000497", "name": "Allianz (EPC 3) – Mehler", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000364", "name": "A", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000399", "name": "B", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000479", "name": "C", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000365", "name": "D", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000484", "name": "E", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000366", "name": "F", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000367", "name": "G", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000368", "name": "H", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000530", "name": "I", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000497", "name": "J", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000380", "name": "K", "type": None, "sector": None, "country": None, "active": True},
+    {"id": "10000381", "name": "L", "type": None, "sector": None, "country": None, "active": True},
+    {"id": "10000382", "name": "M", "type": None, "sector": None, "country": None, "active": True},
+]
+
+SEED_ASSET_ROWS = [
+    {"id": "737", "name": "A", "type": "FRAMEWORK", "issuer_id": "10000380", "cycle_stage": None, "active": True},
+    {"id": "445", "name": "B", "type": "FRAMEWORK", "issuer_id": "10000381", "cycle_stage": None, "active": True},
+    {"id": "166", "name": "C", "type": "FRAMEWORK", "issuer_id": "10000364", "cycle_stage": None, "active": True},
+    {"id": "455", "name": "D", "type": "FRAMEWORK", "issuer_id": "10000399", "cycle_stage": None, "active": True},
+    {"id": "729", "name": "E", "type": "FRAMEWORK", "issuer_id": "10000382", "cycle_stage": None, "active": True},
+    {"id": "598", "name": "F", "type": "FRAMEWORK", "issuer_id": "10000484", "cycle_stage": None, "active": True},
+    {"id": "486", "name": "G", "type": "FRAMEWORK", "issuer_id": "10000367", "cycle_stage": None, "active": True},
+    {"id": "615", "name": "H", "type": "FRAMEWORK", "issuer_id": "10000497", "cycle_stage": None, "active": True},
+    {"id": "407", "name": "I", "type": "FRAMEWORK", "issuer_id": "10000368", "cycle_stage": None, "active": True},
+    {"id": "762", "name": "J", "type": "FRAMEWORK", "issuer_id": "10000530", "cycle_stage": None, "active": True},
 ]
 
 SEED_MODEL_ROWS = [
-    {"id": "CORP-IL", "name": "תאגידים ישראל", "family": "תאגידים", "domain": "Corporate", "owner": "נופר טורגמן", "active_version": "v2", "versions_count": 2, "segments_count": 1, "questionnaires_count": 2, "status": "פעיל", "tone": "green", "last_updated": "15/03/2026"},
-    {"id": "PROJ-FIN", "name": "מימון פרויקטים", "family": "מימון פרויקטים", "domain": "Project Finance", "owner": "דוד שלום", "active_version": "v1", "versions_count": 1, "segments_count": 0, "questionnaires_count": 0, "status": "פעיל", "tone": "green", "last_updated": "10/04/2026"},
-    {"id": "REAL-EST", "name": "תחנות כוח", "family": "מימון פרויקטים", "domain": "Project Finance", "owner": "נופר טורגמן", "active_version": "v1", "versions_count": 2, "segments_count": 1, "questionnaires_count": 0, "status": "פעיל", "tone": "green", "last_updated": "09/07/2026"},
-    {"id": "RE-PROJ", "name": "דירוג פרויקט נדל\"ן יזמי", "family": "נדל\"ן יזמי", "domain": "Real Estate Project", "owner": "נופר טורגמן", "active_version": "v1", "versions_count": 1, "segments_count": 1, "questionnaires_count": 2, "status": "פעיל", "tone": "green", "last_updated": "23/06/2026"},
-    {"id": "TEST-NOFAR", "name": "test1", "family": "test", "domain": "Corporate", "owner": "נופר טורגמן", "active_version": "v1", "versions_count": 1, "segments_count": 1, "questionnaires_count": 2, "status": "טיוטה", "tone": "gray", "last_updated": "09/07/2026"},
-    {"id": "TEST-NOFAR1", "name": "test2", "family": "test", "domain": "Corporate", "owner": "נופר טורגמן", "active_version": "v1", "versions_count": 1, "segments_count": 1, "questionnaires_count": 2, "status": "טיוטה", "tone": "gray", "last_updated": "06/07/2026"},
+    {"id": "CORP-IL", "name": "תאגידים ישראל", "family": "תאגידים", "domain": "Corporate", "owner": "nofar.torgeman", "active_version": "v2", "versions_count": 2, "segments_count": 1, "questionnaires_count": 2, "status": "פעיל", "tone": "green", "last_updated": "15/03/2026"},
+    {"id": "PROJ-FIN", "name": "מימון פרויקטים", "family": "מימון פרויקטים", "domain": "Project Finance", "owner": "david.shalom", "active_version": "v1", "versions_count": 1, "segments_count": 0, "questionnaires_count": 0, "status": "פעיל", "tone": "green", "last_updated": "10/04/2026"},
+    {"id": "REAL-EST", "name": "תחנות כוח", "family": "מימון פרויקטים", "domain": "Project Finance", "owner": "nofar.torgeman", "active_version": "v1", "versions_count": 2, "segments_count": 1, "questionnaires_count": 0, "status": "פעיל", "tone": "green", "last_updated": "09/07/2026"},
+    {"id": "RE-PROJ", "name": "דירוג פרויקט נדל\"ן יזמי", "family": "נדל\"ן יזמי", "domain": "Real Estate Project", "owner": "nofar.torgeman", "active_version": "v1", "versions_count": 1, "segments_count": 1, "questionnaires_count": 2, "status": "פעיל", "tone": "green", "last_updated": "23/06/2026"},
+    {"id": "TEST-NOFAR", "name": "test1", "family": "test", "domain": "Corporate", "owner": "nofar.torgeman", "active_version": "v1", "versions_count": 1, "segments_count": 1, "questionnaires_count": 2, "status": "טיוטה", "tone": "gray", "last_updated": "09/07/2026"},
+    {"id": "TEST-NOFAR1", "name": "test2", "family": "test", "domain": "Corporate", "owner": "nofar.torgeman", "active_version": "v1", "versions_count": 1, "segments_count": 1, "questionnaires_count": 2, "status": "טיוטה", "tone": "gray", "last_updated": "06/07/2026"},
+]
+
+SEED_RATING_SCALE_ROWS = [
+    {"id": "STANDARD", "name": "סולם דירוג סטנדרטי", "description": None},
+]
+
+SEED_RATING_SCALE_LEVEL_ROWS = [
+    {"rating_scale_id": "STANDARD", "label": "AAA", "min_value": 0, "max_value": 0.5},
+    {"rating_scale_id": "STANDARD", "label": "AA", "min_value": 0.5, "max_value": 1},
+    {"rating_scale_id": "STANDARD", "label": "A", "min_value": 1, "max_value": 1.5},
+    {"rating_scale_id": "STANDARD", "label": "BBB", "min_value": 1.5, "max_value": 2},
+    {"rating_scale_id": "STANDARD", "label": "BB", "min_value": 2, "max_value": 2.5},
+    {"rating_scale_id": "STANDARD", "label": "B", "min_value": 2.5, "max_value": 3},
+    {"rating_scale_id": "STANDARD", "label": "CCC", "min_value": 3, "max_value": 3.5},
+    {"rating_scale_id": "STANDARD", "label": "CC", "min_value": 3.5, "max_value": 4},
+    {"rating_scale_id": "STANDARD", "label": "C", "min_value": 4, "max_value": 4.5},
 ]
 
 SEED_QUESTIONNAIRE_ROWS = [
-    {"id": "SECTOR-BIZ-POS", "name": "מיצוב עיסקי", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v6", "description": None, "created_date": "01/03/2024", "created_by": "נופר טורגמן"},
-    {"id": "SECTOR-IND-RATE", "name": "דירוג הענף בו פועלת החברה", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v6", "description": None, "created_date": "01/03/2024", "created_by": "נופר טורגמן"},
-    {"id": "PP-WEIGHTED", "name": "תחנות כוח - משתנים משוקללים", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v9", "description": None, "created_date": "15/06/2024", "created_by": "נופר טורגמן"},
-    {"id": "PP-ADJUSTMENTS", "name": "תחנות כוח - התאמות דירוג", "calculation_method": "סכום", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v25", "description": None, "created_date": "15/06/2024", "created_by": "נופר טורגמן"},
-    {"id": "RE-PROJ-WEIGHTED", "name": "דירוג פרויקט נדל\"ן יזמי - משתנים משוקללים", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v2", "description": None, "created_date": "15/06/2024", "created_by": "נופר טורגמן"},
-    {"id": "RE-PROJ-ADJUST", "name": "דירוג פרויקט נדל\"ן יזמי - התאמות דירוג", "calculation_method": "סכום", "type": "מערכת", "status": "פעיל", "tone": "green", "version": "v1", "description": None, "created_date": "15/06/2024", "created_by": "נופר טורגמן"},
-    {"id": "TEST", "name": "טסט", "calculation_method": "מקסימום", "type": "מותאם", "status": "טיוטה", "tone": "gray", "version": "v2", "description": None, "created_date": "06/07/2026", "created_by": "נופר טורגמן"},
-    {"id": "T1", "name": "test1", "calculation_method": "סכום", "type": "מותאם", "status": "טיוטה", "tone": "gray", "version": "v2", "description": None, "created_date": "06/07/2026", "created_by": "נופר טורגמן"},
-    {"id": "RE-PROJ-MACRO", "name": "סיכוני מקרו פרויקט נדל\"ן יזמי", "calculation_method": "ממוצע משוקלל", "type": "מותאם", "status": "טיוטה", "tone": "gray", "version": "v1", "description": None, "created_date": "09/07/2026", "created_by": "נופר טורגמן"},
+    {"id": "SECTOR-BIZ-POS", "name": "מיצוב עיסקי", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v6", "description": None, "created_date": "01/03/2024", "created_by": "nofar.torgeman"},
+    {"id": "SECTOR-IND-RATE", "name": "דירוג הענף בו פועלת החברה", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v6", "description": None, "created_date": "01/03/2024", "created_by": "nofar.torgeman"},
+    {"id": "PP-WEIGHTED", "name": "תחנות כוח - משתנים משוקללים", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v9", "description": None, "created_date": "15/06/2024", "created_by": "nofar.torgeman"},
+    {"id": "PP-ADJUSTMENTS", "name": "תחנות כוח - התאמות דירוג", "calculation_method": "סכום", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v25", "description": None, "created_date": "15/06/2024", "created_by": "nofar.torgeman"},
+    {"id": "RE-PROJ-WEIGHTED", "name": "דירוג פרויקט נדל\"ן יזמי - משתנים משוקללים", "calculation_method": "ממוצע משוקלל", "type": "מערכת", "status": "טיוטה", "tone": "gray", "version": "v2", "description": None, "created_date": "15/06/2024", "created_by": "nofar.torgeman"},
+    {"id": "RE-PROJ-ADJUST", "name": "דירוג פרויקט נדל\"ן יזמי - התאמות דירוג", "calculation_method": "סכום", "type": "מערכת", "status": "פעיל", "tone": "green", "version": "v1", "description": None, "created_date": "15/06/2024", "created_by": "nofar.torgeman"},
+    {"id": "TEST", "name": "טסט", "calculation_method": "מקסימום", "type": "מותאם", "status": "טיוטה", "tone": "gray", "version": "v2", "description": None, "created_date": "06/07/2026", "created_by": "nofar.torgeman"},
+    {"id": "T1", "name": "test1", "calculation_method": "סכום", "type": "מותאם", "status": "טיוטה", "tone": "gray", "version": "v2", "description": None, "created_date": "06/07/2026", "created_by": "nofar.torgeman"},
+    {"id": "RE-PROJ-MACRO", "name": "סיכוני מקרו פרויקט נדל\"ן יזמי", "calculation_method": "ממוצע משוקלל", "type": "מותאם", "status": "טיוטה", "tone": "gray", "version": "v1", "description": None, "created_date": "09/07/2026", "created_by": "nofar.torgeman"},
 ]
 
 SEED_PARAMETER_ROWS = [
@@ -147,11 +218,16 @@ SEED_ROLE_ROWS = [
     {"id": "RATING_ANALYST", "description": None},
 ]
 
+# There's no login/session system yet, so newly created or duplicated
+# questionnaires are attributed to this fixed user id (joined to their
+# current full_name at read time via _attach_creator_names).
+DEFAULT_CREATED_BY = "nofar.torgeman"
+
 SEED_USER_ROWS = [
-    {"id": "nofar.torgeman", "full_name": "נופר טורגמן", "email": None, "active": True},
-    {"id": "david.shalom", "full_name": "דוד שלום", "email": None, "active": True},
-    {"id": "sarah.mizrahi", "full_name": "שרה מזרחי", "email": None, "active": True},
-    {"id": "revital.wolkovich", "full_name": "רוית וולקוביץ", "email": None, "active": True},
+    {"id": "nofar.torgeman", "full_name": "אבי כהן", "email": None, "active": True},
+    {"id": "david.shalom", "full_name": "משה לוי", "email": None, "active": True},
+    {"id": "sarah.mizrahi", "full_name": "אברהם שלמה", "email": None, "active": True},
+    {"id": "revital.wolkovich", "full_name": "ליטל שוורץ", "email": None, "active": True},
 ]
 
 SEED_USER_ROLE_LINKS = [
@@ -181,43 +257,90 @@ def get_connection():
 
 def init_db():
     conn = get_connection()
+
+    # Older schemas had `model`/`team`/`framework`/`subject` as NOT NULL text
+    # columns before they were migrated to model_id/team_id/framework_issuer_id
+    # (or framework_asset_id)/subject_issuer_id. SQLite can't drop a NOT NULL
+    # constraint via ALTER TABLE, so if any of those legacy columns are still
+    # in place, rebuild the table (preserving every column that's still used)
+    # before applying the current schema — otherwise inserting a new row
+    # without them violates the leftover NOT NULL constraint.
+    legacy_rankings_cols = {
+        r["name"]: r["notnull"]
+        for r in conn.execute("PRAGMA table_info(rankings)").fetchall()
+    }
+    if any(legacy_rankings_cols.get(c) for c in ("model", "team", "framework", "subject")):
+        conn.execute("ALTER TABLE rankings RENAME TO rankings_old")
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS rankings (
             id TEXT PRIMARY KEY,
             status TEXT NOT NULL,
             tone TEXT NOT NULL,
-            model TEXT NOT NULL,
-            team TEXT NOT NULL,
-            framework TEXT NOT NULL,
+            model_id TEXT REFERENCES models(id),
+            team_id TEXT REFERENCES teams(id),
+            framework_issuer_id TEXT REFERENCES issuers(id),
+            framework_asset_id TEXT REFERENCES assets(id),
             kind TEXT NOT NULL,
             code TEXT NOT NULL,
-            subject TEXT NOT NULL,
-            approval_date TEXT
+            subject_issuer_id TEXT REFERENCES issuers(id),
+            approval_date TEXT,
+            data_date TEXT
         )
         """
     )
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='rankings_old'").fetchone():
+        old_cols = {r["name"] for r in conn.execute("PRAGMA table_info(rankings_old)").fetchall()}
+        carry_cols = [
+            c
+            for c in (
+                "id", "status", "tone", "model_id", "team_id", "framework_issuer_id",
+                "framework_asset_id", "kind", "code", "subject_issuer_id", "approval_date", "data_date",
+            )
+            if c in old_cols
+        ]
+        cols_sql = ", ".join(carry_cols)
+        conn.execute(f"INSERT INTO rankings ({cols_sql}) SELECT {cols_sql} FROM rankings_old")
+        conn.execute("DROP TABLE rankings_old")
     rankings_columns = {row["name"] for row in conn.execute("PRAGMA table_info(rankings)").fetchall()}
     if "approval_date" not in rankings_columns:
         conn.execute("ALTER TABLE rankings ADD COLUMN approval_date TEXT")
+    if "model_id" not in rankings_columns:
+        conn.execute("ALTER TABLE rankings ADD COLUMN model_id TEXT")
+    if "framework_issuer_id" not in rankings_columns:
+        conn.execute("ALTER TABLE rankings ADD COLUMN framework_issuer_id TEXT")
+    if "framework_asset_id" not in rankings_columns:
+        conn.execute("ALTER TABLE rankings ADD COLUMN framework_asset_id TEXT")
+    if "subject_issuer_id" not in rankings_columns:
+        conn.execute("ALTER TABLE rankings ADD COLUMN subject_issuer_id TEXT")
+    if "team_id" not in rankings_columns:
+        conn.execute("ALTER TABLE rankings ADD COLUMN team_id TEXT")
+    if "data_date" not in rankings_columns:
+        conn.execute("ALTER TABLE rankings ADD COLUMN data_date TEXT")
     row_count = conn.execute("SELECT COUNT(*) FROM rankings").fetchone()[0]
     if row_count == 0:
         conn.executemany(
             """
-            INSERT INTO rankings (id, status, tone, model, team, framework, kind, code, subject, approval_date)
-            VALUES (:id, :status, :tone, :model, :team, :framework, :kind, :code, :subject, :approval_date)
+            INSERT INTO rankings
+                (id, status, tone, model_id, team_id, framework_issuer_id, kind, code, subject_issuer_id, approval_date)
+            VALUES
+                (:id, :status, :tone, :model_id, :team_id, :framework_issuer_id, :kind, :code, :subject_issuer_id, :approval_date)
             """,
             SEED_ROWS,
         )
         conn.commit()
     else:
-        # Backfill rows created before the canonical status set / approval_date
-        # existed. Only touches rows still on their old status string, so any
-        # real status change made since (via the PATCH endpoint) is preserved.
+        # Backfill rows created before the canonical status set / approval_date /
+        # model_id / framework_issuer_id / subject_issuer_id / team_id existed.
+        # Only touches rows still on their old status string or missing an id,
+        # so any real status change made since (via the PATCH endpoint) is
+        # preserved.
         old_statuses = {"בתהליך", "אושר בוועדה"}
         for seed in SEED_ROWS:
             row = conn.execute(
-                "SELECT status, approval_date FROM rankings WHERE id = ?", (seed["id"],)
+                "SELECT status, approval_date, model_id, framework_issuer_id, subject_issuer_id, team_id FROM rankings WHERE id = ?",
+                (seed["id"],),
             ).fetchone()
             if row is None:
                 continue
@@ -231,15 +354,46 @@ def init_db():
                     "UPDATE rankings SET approval_date = ? WHERE id = ?",
                     (seed["approval_date"], seed["id"]),
                 )
+            if row["model_id"] is None and seed.get("model_id") is not None:
+                conn.execute(
+                    "UPDATE rankings SET model_id = ? WHERE id = ?",
+                    (seed["model_id"], seed["id"]),
+                )
+            if row["team_id"] is None and seed.get("team_id") is not None:
+                conn.execute(
+                    "UPDATE rankings SET team_id = ? WHERE id = ?",
+                    (seed["team_id"], seed["id"]),
+                )
+            if row["framework_issuer_id"] is None and seed.get("framework_issuer_id") is not None:
+                conn.execute(
+                    "UPDATE rankings SET framework_issuer_id = ? WHERE id = ?",
+                    (seed["framework_issuer_id"], seed["id"]),
+                )
+            if row["subject_issuer_id"] is None and seed.get("subject_issuer_id") is not None:
+                conn.execute(
+                    "UPDATE rankings SET subject_issuer_id = ? WHERE id = ?",
+                    (seed["subject_issuer_id"], seed["id"]),
+                )
         conn.commit()
+
+    # Same legacy-NOT-NULL situation as rankings above: older schemas had
+    # `subject`/`framework` as NOT NULL text columns before the issuer-id
+    # migration.
+    legacy_process_cols = {
+        r["name"]: r["notnull"]
+        for r in conn.execute("PRAGMA table_info(ranking_processes)").fetchall()
+    }
+    if any(legacy_process_cols.get(c) for c in ("subject", "framework")):
+        conn.execute("ALTER TABLE ranking_processes RENAME TO ranking_processes_old")
 
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ranking_processes (
             id TEXT PRIMARY KEY,
-            subject TEXT NOT NULL,
+            subject_issuer_id TEXT REFERENCES issuers(id),
             code TEXT NOT NULL,
-            framework TEXT NOT NULL,
+            framework_issuer_id TEXT REFERENCES issuers(id),
+            framework_asset_id TEXT REFERENCES assets(id),
             status TEXT NOT NULL,
             tone TEXT NOT NULL,
             final_score REAL,
@@ -250,28 +404,50 @@ def init_db():
         )
         """
     )
+    if conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='ranking_processes_old'"
+    ).fetchone():
+        old_process_cols = {r["name"] for r in conn.execute("PRAGMA table_info(ranking_processes_old)").fetchall()}
+        carry_process_cols = [
+            c
+            for c in (
+                "id", "subject_issuer_id", "code", "framework_issuer_id", "framework_asset_id",
+                "status", "tone", "final_score", "final_rating", "computed_score", "computed_rating", "completion",
+            )
+            if c in old_process_cols
+        ]
+        cols_sql = ", ".join(carry_process_cols)
+        conn.execute(f"INSERT INTO ranking_processes ({cols_sql}) SELECT {cols_sql} FROM ranking_processes_old")
+        conn.execute("DROP TABLE ranking_processes_old")
     process_columns = {row["name"] for row in conn.execute("PRAGMA table_info(ranking_processes)").fetchall()}
     for column in ("computed_score", "computed_rating"):
         if column not in process_columns:
             ddl_type = "REAL" if column == "computed_score" else "TEXT"
             conn.execute(f"ALTER TABLE ranking_processes ADD COLUMN {column} {ddl_type}")
+    if "subject_issuer_id" not in process_columns:
+        conn.execute("ALTER TABLE ranking_processes ADD COLUMN subject_issuer_id TEXT")
+    if "framework_issuer_id" not in process_columns:
+        conn.execute("ALTER TABLE ranking_processes ADD COLUMN framework_issuer_id TEXT")
+    if "framework_asset_id" not in process_columns:
+        conn.execute("ALTER TABLE ranking_processes ADD COLUMN framework_asset_id TEXT")
     process_count = conn.execute("SELECT COUNT(*) FROM ranking_processes").fetchone()[0]
     if process_count == 0:
         conn.executemany(
             """
             INSERT INTO ranking_processes
-                (id, subject, code, framework, status, tone, final_score, final_rating,
+                (id, subject_issuer_id, code, framework_issuer_id, status, tone, final_score, final_rating,
                  computed_score, computed_rating, completion)
             VALUES
-                (:id, :subject, :code, :framework, :status, :tone, :final_score, :final_rating,
+                (:id, :subject_issuer_id, :code, :framework_issuer_id, :status, :tone, :final_score, :final_rating,
                  :computed_score, :computed_rating, :completion)
             """,
             SEED_PROCESS_ROWS,
         )
         conn.commit()
     else:
-        # Backfill computed_score/computed_rating for rows created before
-        # these columns existed, without clobbering any later real edit.
+        # Backfill computed_score/computed_rating/subject_issuer_id/
+        # framework_issuer_id for rows created before these columns existed,
+        # without clobbering any later real edit.
         for seed in SEED_PROCESS_ROWS:
             conn.execute(
                 """
@@ -280,6 +456,21 @@ def init_db():
                 """,
                 seed,
             )
+            row = conn.execute(
+                "SELECT subject_issuer_id, framework_issuer_id FROM ranking_processes WHERE id = ?", (seed["id"],)
+            ).fetchone()
+            if row is None:
+                continue
+            if row["subject_issuer_id"] is None and seed.get("subject_issuer_id") is not None:
+                conn.execute(
+                    "UPDATE ranking_processes SET subject_issuer_id = ? WHERE id = ?",
+                    (seed["subject_issuer_id"], seed["id"]),
+                )
+            if row["framework_issuer_id"] is None and seed.get("framework_issuer_id") is not None:
+                conn.execute(
+                    "UPDATE ranking_processes SET framework_issuer_id = ? WHERE id = ?",
+                    (seed["framework_issuer_id"], seed["id"]),
+                )
         conn.commit()
 
     conn.execute(
@@ -304,6 +495,106 @@ def init_db():
             SEED_ISSUER_ROWS,
         )
         conn.commit()
+    else:
+        for seed in SEED_ISSUER_ROWS:
+            existing = conn.execute("SELECT 1 FROM issuers WHERE id = ?", (seed["id"],)).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO issuers (id, name, type, sector, country, active)
+                    VALUES (:id, :name, :type, :sector, :country, :active)
+                    """,
+                    seed,
+                )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS teams (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT,
+            process_kind TEXT,
+            committee_submission INTEGER NOT NULL DEFAULT 0,
+            validity_tracking INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    team_count = conn.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
+    if team_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO teams (id, name, type, process_kind, committee_submission, validity_tracking, active)
+            VALUES (:id, :name, :type, :process_kind, :committee_submission, :validity_tracking, :active)
+            """,
+            SEED_TEAM_ROWS,
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS assets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT,
+            issuer_id TEXT REFERENCES issuers(id),
+            cycle_stage TEXT,
+            active INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    asset_count = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
+    if asset_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO assets (id, name, type, issuer_id, cycle_stage, active)
+            VALUES (:id, :name, :type, :issuer_id, :cycle_stage, :active)
+            """,
+            SEED_ASSET_ROWS,
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rating_scales (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT
+        )
+        """
+    )
+    rating_scale_count = conn.execute("SELECT COUNT(*) FROM rating_scales").fetchone()[0]
+    if rating_scale_count == 0:
+        conn.executemany(
+            "INSERT INTO rating_scales (id, name, description) VALUES (:id, :name, :description)",
+            SEED_RATING_SCALE_ROWS,
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rating_scale_levels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rating_scale_id TEXT NOT NULL REFERENCES rating_scales(id),
+            label TEXT NOT NULL,
+            min_value REAL NOT NULL,
+            max_value REAL NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    rating_scale_level_count = conn.execute("SELECT COUNT(*) FROM rating_scale_levels").fetchone()[0]
+    if rating_scale_level_count == 0:
+        for position, level in enumerate(SEED_RATING_SCALE_LEVEL_ROWS):
+            conn.execute(
+                """
+                INSERT INTO rating_scale_levels (rating_scale_id, label, min_value, max_value, position)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (level["rating_scale_id"], level["label"], level["min_value"], level["max_value"], position),
+            )
+        conn.commit()
 
     conn.execute(
         """
@@ -320,13 +611,16 @@ def init_db():
             status TEXT NOT NULL,
             tone TEXT NOT NULL,
             last_updated TEXT NOT NULL,
-            description TEXT
+            description TEXT,
+            rating_scale_id TEXT REFERENCES rating_scales(id)
         )
         """
     )
     model_columns = {row["name"] for row in conn.execute("PRAGMA table_info(models)").fetchall()}
     if "description" not in model_columns:
         conn.execute("ALTER TABLE models ADD COLUMN description TEXT")
+    if "rating_scale_id" not in model_columns:
+        conn.execute("ALTER TABLE models ADD COLUMN rating_scale_id TEXT")
     model_count = conn.execute("SELECT COUNT(*) FROM models").fetchone()[0]
     if model_count == 0:
         conn.executemany(
@@ -448,10 +742,17 @@ def init_db():
         CREATE TABLE IF NOT EXISTS model_questionnaires (
             model_id TEXT NOT NULL REFERENCES models(id),
             questionnaire_id TEXT NOT NULL REFERENCES questionnaires(id),
+            weight INTEGER NOT NULL DEFAULT 0,
+            position INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (model_id, questionnaire_id)
         )
         """
     )
+    model_q_columns = {row["name"] for row in conn.execute("PRAGMA table_info(model_questionnaires)").fetchall()}
+    if "weight" not in model_q_columns:
+        conn.execute("ALTER TABLE model_questionnaires ADD COLUMN weight INTEGER NOT NULL DEFAULT 0")
+    if "position" not in model_q_columns:
+        conn.execute("ALTER TABLE model_questionnaires ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
 
     conn.execute(
         """
@@ -611,6 +912,41 @@ def _add_one_year(d):
         return d.replace(year=d.year + 1, day=28)
 
 
+def _attach_ranking_model_names(conn, rows):
+    """Derive the display 'model' string (name + active_version) from each
+    row's model_id, so renaming/re-versioning a model is reflected everywhere
+    it's ranked instead of relying on a frozen copy of the text."""
+    models_by_id = {
+        row["id"]: f"{row['name']} {row['active_version']}"
+        for row in conn.execute("SELECT id, name, active_version FROM models").fetchall()
+    }
+    for row in rows:
+        row["model"] = models_by_id.get(row["model_id"])
+    return rows
+
+
+def _attach_issuer_display_names(conn, rows):
+    """Derive the display 'framework'/'subject' strings from
+    framework_issuer_id/subject_issuer_id, so renaming an issuer is
+    reflected everywhere it's referenced instead of relying on a frozen
+    copy of the text."""
+    names_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM issuers").fetchall()}
+    for row in rows:
+        row["framework"] = names_by_id.get(row["framework_issuer_id"])
+        row["subject"] = names_by_id.get(row["subject_issuer_id"])
+    return rows
+
+
+def _attach_team_names(conn, rows):
+    """Derive the display 'team' string from team_id, so renaming a team is
+    reflected everywhere it's referenced instead of relying on a frozen
+    copy of the text."""
+    names_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM teams").fetchall()}
+    for row in rows:
+        row["team"] = names_by_id.get(row["team_id"])
+    return rows
+
+
 def get_all_rankings():
     """Rankings joined with their matching תהליכי דירוג row (same id) for the
     score/rating/completion columns, plus a validity window derived from
@@ -620,6 +956,9 @@ def get_all_rankings():
     process_rows = conn.execute(
         "SELECT id, final_score, final_rating, computed_score, computed_rating, completion FROM ranking_processes"
     ).fetchall()
+    _attach_ranking_model_names(conn, rows)
+    _attach_issuer_display_names(conn, rows)
+    _attach_team_names(conn, rows)
     conn.close()
 
     process_by_id = {p["id"]: dict(p) for p in process_rows}
@@ -631,7 +970,9 @@ def get_all_rankings():
         row["computed_rating"] = proc["computed_rating"] if proc else None
         row["completion"] = proc["completion"] if proc else 0
 
-        row["data_date"] = None  # not sourced from anywhere yet
+        row["data_date"] = (
+            date.fromisoformat(row["data_date"]).strftime("%d/%m/%Y") if row["data_date"] else None
+        )
         if row["status"] == "בתוקף" and row["approval_date"]:
             valid_from = date.fromisoformat(row["approval_date"])
             valid_until = _add_one_year(valid_from)
@@ -650,8 +991,15 @@ def get_rankings_by_status(status: str):
 def get_ranking(ranking_id: str):
     conn = get_connection()
     row = conn.execute("SELECT * FROM rankings WHERE id = ?", (ranking_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    ranking = dict(row)
+    _attach_ranking_model_names(conn, [ranking])
+    _attach_issuer_display_names(conn, [ranking])
+    _attach_team_names(conn, [ranking])
     conn.close()
-    return dict(row) if row else None
+    return ranking
 
 
 def update_ranking_status(ranking_id: str, status: str, tone: str | None):
@@ -708,9 +1056,10 @@ def count_rankings_expiring_within(days: int = 60):
 
 def get_all_processes():
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM ranking_processes ORDER BY id DESC").fetchall()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM ranking_processes ORDER BY id DESC").fetchall()]
+    _attach_issuer_display_names(conn, rows)
     conn.close()
-    return [dict(row) for row in rows]
+    return rows
 
 
 def count_processes():
@@ -718,6 +1067,73 @@ def count_processes():
     count = conn.execute("SELECT COUNT(*) FROM ranking_processes").fetchone()[0]
     conn.close()
     return count
+
+
+def get_process(process_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM ranking_processes WHERE id = ?", (process_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    process = dict(row)
+    _attach_issuer_display_names(conn, [process])
+    conn.close()
+    return process
+
+
+def _next_process_id():
+    conn = get_connection()
+    max_num = 0
+    for table in ("rankings", "ranking_processes"):
+        for row in conn.execute(f"SELECT id FROM {table}").fetchall():
+            match = re.match(r"RP-\d{4}-(\d+)", row["id"])
+            if match:
+                max_num = max(max_num, int(match.group(1)))
+    conn.close()
+    return f"RP-{date.today().year}-{max_num + 1:05d}"
+
+
+def create_ranking_process(
+    model_id: str,
+    kind: str,
+    framework_issuer_id: str | None,
+    framework_asset_id: str | None,
+    data_date: str | None,
+):
+    """Creates a new תהליך דירוג: a rankings row (for the report page) and a
+    matching ranking_processes row (for the processes page), sharing the same
+    generated id. subject_issuer_id always mirrors the resolved
+    framework_issuer_id — when the framework is an asset, that's the asset's
+    own issuer_id, so the ranked entity is still the issuer that owns it."""
+    conn = get_connection()
+    if kind == "נכס":
+        asset = conn.execute("SELECT issuer_id FROM assets WHERE id = ?", (framework_asset_id,)).fetchone()
+        resolved_issuer_id = asset["issuer_id"] if asset else None
+    else:
+        resolved_issuer_id = framework_issuer_id
+
+    new_id = _next_process_id()
+    conn.execute(
+        """
+        INSERT INTO rankings
+            (id, status, tone, model_id, team_id, framework_issuer_id, framework_asset_id, kind, code,
+             subject_issuer_id, approval_date, data_date)
+        VALUES (?, 'טיוטה', 'gray', ?, NULL, ?, ?, ?, '-', ?, NULL, ?)
+        """,
+        (new_id, model_id, resolved_issuer_id, framework_asset_id, kind, resolved_issuer_id, data_date),
+    )
+    conn.execute(
+        """
+        INSERT INTO ranking_processes
+            (id, subject_issuer_id, code, framework_issuer_id, framework_asset_id, status, tone,
+             final_score, final_rating, computed_score, computed_rating, completion)
+        VALUES (?, ?, '-', ?, ?, 'טיוטה', 'gray', NULL, NULL, NULL, NULL, 0)
+        """,
+        (new_id, resolved_issuer_id, resolved_issuer_id, framework_asset_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_process(new_id)
 
 
 def get_all_issuers():
@@ -796,15 +1212,196 @@ def delete_issuer(issuer_id: str):
     conn.close()
 
 
+def get_all_teams():
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM teams ORDER BY rowid ASC").fetchall()
+    conn.close()
+    return [
+        {**dict(row), "committee_submission": bool(row["committee_submission"]), "validity_tracking": bool(row["validity_tracking"]), "active": bool(row["active"])}
+        for row in rows
+    ]
+
+
+def count_teams():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_team(team_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    team = dict(row)
+    team["committee_submission"] = bool(team["committee_submission"])
+    team["validity_tracking"] = bool(team["validity_tracking"])
+    team["active"] = bool(team["active"])
+    return team
+
+
+def team_code_taken(code: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM teams WHERE id = ? AND id != ?", (code, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM teams WHERE id = ?", (code,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def team_name_taken(name: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM teams WHERE name = ? AND id != ?", (name, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM teams WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_team(
+    id: str,
+    name: str,
+    type: str | None,
+    process_kind: str | None,
+    committee_submission: bool,
+    validity_tracking: bool,
+):
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO teams (id, name, type, process_kind, committee_submission, validity_tracking, active)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+        """,
+        (id, name, type, process_kind, committee_submission, validity_tracking),
+    )
+    conn.commit()
+    conn.close()
+    return get_team(id)
+
+
+def update_team(
+    original_id: str,
+    id: str,
+    name: str,
+    type: str | None,
+    process_kind: str | None,
+    committee_submission: bool,
+    validity_tracking: bool,
+):
+    conn = get_connection()
+    conn.execute(
+        """
+        UPDATE teams SET id = ?, name = ?, type = ?, process_kind = ?, committee_submission = ?, validity_tracking = ?
+        WHERE id = ?
+        """,
+        (id, name, type, process_kind, committee_submission, validity_tracking, original_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_team(id)
+
+
+def _attach_issuer_names(conn, assets):
+    names_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM issuers").fetchall()}
+    for asset in assets:
+        asset["issuer_name"] = names_by_id.get(asset["issuer_id"])
+    return assets
+
+
+def get_all_assets():
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM assets ORDER BY rowid ASC").fetchall()]
+    _attach_issuer_names(conn, rows)
+    conn.close()
+    return [{**row, "active": bool(row["active"])} for row in rows]
+
+
+def count_assets():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_asset(asset_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    asset = dict(row)
+    _attach_issuer_names(conn, [asset])
+    conn.close()
+    asset["active"] = bool(asset["active"])
+    return asset
+
+
+def asset_code_taken(code: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM assets WHERE id = ? AND id != ?", (code, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM assets WHERE id = ?", (code,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_asset(id: str, name: str, type: str | None, issuer_id: str | None, cycle_stage: str | None):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO assets (id, name, type, issuer_id, cycle_stage, active) VALUES (?, ?, ?, ?, ?, 1)",
+        (id, name, type, issuer_id, cycle_stage),
+    )
+    conn.commit()
+    conn.close()
+    return get_asset(id)
+
+
+def update_asset(
+    original_id: str, id: str, name: str, type: str | None, issuer_id: str | None, cycle_stage: str | None
+):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE assets SET id = ?, name = ?, type = ?, issuer_id = ?, cycle_stage = ? WHERE id = ?",
+        (id, name, type, issuer_id, cycle_stage, original_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_asset(id)
+
+
 def _attach_questionnaire_ids(conn, models):
-    links = conn.execute("SELECT model_id, questionnaire_id FROM model_questionnaires").fetchall()
-    ids_by_model = {}
+    links = conn.execute(
+        "SELECT model_id, questionnaire_id, weight FROM model_questionnaires ORDER BY position ASC"
+    ).fetchall()
+    entries_by_model = {}
     for link in links:
-        ids_by_model.setdefault(link["model_id"], []).append(link["questionnaire_id"])
+        entries_by_model.setdefault(link["model_id"], []).append(
+            {"id": link["questionnaire_id"], "weight": link["weight"]}
+        )
     for model in models:
-        q_ids = ids_by_model.get(model["id"], [])
-        model["questionnaire_ids"] = q_ids
-        model["questionnaires_count"] = len(q_ids)
+        entries = entries_by_model.get(model["id"], [])
+        model["questionnaires"] = entries
+        model["questionnaire_ids"] = [e["id"] for e in entries]
+        model["questionnaires_count"] = len(entries)
+    return models
+
+
+def _attach_owner_names(conn, models):
+    names_by_id = {row["id"]: row["full_name"] for row in conn.execute("SELECT id, full_name FROM users").fetchall()}
+    for model in models:
+        model["owner_name"] = names_by_id.get(model["owner"], model["owner"])
+    return models
+
+
+def _attach_rating_scale_names(conn, models):
+    names_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM rating_scales").fetchall()}
+    for model in models:
+        model["rating_scale_name"] = names_by_id.get(model["rating_scale_id"])
     return models
 
 
@@ -812,6 +1409,8 @@ def get_all_models():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM models ORDER BY rowid ASC").fetchall()]
     _attach_questionnaire_ids(conn, rows)
+    _attach_owner_names(conn, rows)
+    _attach_rating_scale_names(conn, rows)
     conn.close()
     return rows
 
@@ -831,6 +1430,8 @@ def get_model(model_id: str):
         return None
     model = dict(row)
     _attach_questionnaire_ids(conn, [model])
+    _attach_owner_names(conn, [model])
+    _attach_rating_scale_names(conn, [model])
     conn.close()
     return model
 
@@ -867,19 +1468,20 @@ def create_model(
     owner: str,
     last_updated: str,
     description: str | None = None,
-    questionnaire_ids: list[str] | None = None,
+    questionnaires: list[dict] | None = None,
+    rating_scale_id: str | None = None,
 ):
     conn = get_connection()
     conn.execute(
         """
         INSERT INTO models
             (id, name, family, domain, owner, active_version, versions_count,
-             segments_count, questionnaires_count, status, tone, last_updated, description)
-        VALUES (?, ?, ?, ?, ?, 'v1', 1, 0, 0, 'טיוטה', 'gray', ?, ?)
+             segments_count, questionnaires_count, status, tone, last_updated, description, rating_scale_id)
+        VALUES (?, ?, ?, ?, ?, 'v1', 1, 0, 0, 'טיוטה', 'gray', ?, ?, ?)
         """,
-        (id, name, family, domain, owner, last_updated, description),
+        (id, name, family, domain, owner, last_updated, description, rating_scale_id),
     )
-    _replace_model_questionnaires(conn, id, questionnaire_ids or [])
+    _replace_model_questionnaires(conn, id, questionnaires or [])
     conn.commit()
     conn.close()
     return get_model(id)
@@ -894,20 +1496,22 @@ def update_model(
     owner: str,
     last_updated: str,
     description: str | None = None,
-    questionnaire_ids: list[str] | None = None,
+    questionnaires: list[dict] | None = None,
+    rating_scale_id: str | None = None,
 ):
     conn = get_connection()
     conn.execute(
         """
-        UPDATE models SET id = ?, name = ?, family = ?, domain = ?, owner = ?, last_updated = ?, description = ?
+        UPDATE models SET id = ?, name = ?, family = ?, domain = ?, owner = ?, last_updated = ?, description = ?,
+            rating_scale_id = ?
         WHERE id = ?
         """,
-        (id, name, family, domain, owner, last_updated, description, original_id),
+        (id, name, family, domain, owner, last_updated, description, rating_scale_id, original_id),
     )
     if original_id != id:
         conn.execute("DELETE FROM model_questionnaires WHERE model_id = ?", (original_id,))
-    if questionnaire_ids is not None:
-        _replace_model_questionnaires(conn, id, questionnaire_ids)
+    if questionnaires is not None:
+        _replace_model_questionnaires(conn, id, questionnaires)
     conn.commit()
     conn.close()
     return get_model(id)
@@ -921,12 +1525,128 @@ def delete_model(model_id: str):
     conn.close()
 
 
-def _replace_model_questionnaires(conn, model_id: str, questionnaire_ids: list[str]):
-    conn.execute("DELETE FROM model_questionnaires WHERE model_id = ?", (model_id,))
-    if questionnaire_ids:
+def _rating_scale_level_counts(conn):
+    rows = conn.execute(
+        "SELECT rating_scale_id, COUNT(*) AS n FROM rating_scale_levels GROUP BY rating_scale_id"
+    ).fetchall()
+    return {row["rating_scale_id"]: row["n"] for row in rows}
+
+
+def get_all_rating_scales():
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM rating_scales ORDER BY rowid ASC").fetchall()]
+    counts = _rating_scale_level_counts(conn)
+    for row in rows:
+        row["levels_count"] = counts.get(row["id"], 0)
+    conn.close()
+    return rows
+
+
+def count_rating_scales():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM rating_scales").fetchone()[0]
+    conn.close()
+    return count
+
+
+def _get_rating_scale_levels(conn, rating_scale_id: str):
+    rows = conn.execute(
+        "SELECT label, min_value, max_value FROM rating_scale_levels WHERE rating_scale_id = ? ORDER BY position ASC",
+        (rating_scale_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_rating_scale(rating_scale_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM rating_scales WHERE id = ?", (rating_scale_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    scale = dict(row)
+    scale["levels"] = _get_rating_scale_levels(conn, rating_scale_id)
+    scale["levels_count"] = len(scale["levels"])
+    conn.close()
+    return scale
+
+
+def rating_scale_code_taken(code: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM rating_scales WHERE id = ? AND id != ?", (code, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM rating_scales WHERE id = ?", (code,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def rating_scale_name_taken(name: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM rating_scales WHERE name = ? AND id != ?", (name, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM rating_scales WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def _replace_rating_scale_levels(conn, rating_scale_id: str, levels: list[dict]):
+    conn.execute("DELETE FROM rating_scale_levels WHERE rating_scale_id = ?", (rating_scale_id,))
+    if levels:
         conn.executemany(
-            "INSERT INTO model_questionnaires (model_id, questionnaire_id) VALUES (?, ?)",
-            [(model_id, q_id) for q_id in questionnaire_ids],
+            """
+            INSERT INTO rating_scale_levels (rating_scale_id, label, min_value, max_value, position)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (rating_scale_id, lvl["label"], lvl["min_value"], lvl["max_value"], i)
+                for i, lvl in enumerate(levels)
+            ],
+        )
+
+
+def create_rating_scale(id: str, name: str, description: str | None, levels: list[dict]):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO rating_scales (id, name, description) VALUES (?, ?, ?)",
+        (id, name, description),
+    )
+    _replace_rating_scale_levels(conn, id, levels)
+    conn.commit()
+    conn.close()
+    return get_rating_scale(id)
+
+
+def update_rating_scale(original_id: str, id: str, name: str, description: str | None, levels: list[dict]):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE rating_scales SET id = ?, name = ?, description = ? WHERE id = ?",
+        (id, name, description, original_id),
+    )
+    if original_id != id:
+        conn.execute("UPDATE rating_scale_levels SET rating_scale_id = ? WHERE rating_scale_id = ?", (id, original_id))
+        conn.execute("UPDATE models SET rating_scale_id = ? WHERE rating_scale_id = ?", (id, original_id))
+    _replace_rating_scale_levels(conn, id, levels)
+    conn.commit()
+    conn.close()
+    return get_rating_scale(id)
+
+
+def delete_rating_scale(rating_scale_id: str):
+    conn = get_connection()
+    conn.execute("DELETE FROM rating_scale_levels WHERE rating_scale_id = ?", (rating_scale_id,))
+    conn.execute("UPDATE models SET rating_scale_id = NULL WHERE rating_scale_id = ?", (rating_scale_id,))
+    conn.execute("DELETE FROM rating_scales WHERE id = ?", (rating_scale_id,))
+    conn.commit()
+    conn.close()
+
+
+def _replace_model_questionnaires(conn, model_id: str, questionnaires: list[dict]):
+    conn.execute("DELETE FROM model_questionnaires WHERE model_id = ?", (model_id,))
+    if questionnaires:
+        conn.executemany(
+            "INSERT INTO model_questionnaires (model_id, questionnaire_id, weight, position) VALUES (?, ?, ?, ?)",
+            [(model_id, q["id"], q["weight"], i) for i, q in enumerate(questionnaires)],
         )
 
 
@@ -937,12 +1657,20 @@ def _questionnaire_parameter_counts(conn):
     return {row["questionnaire_id"]: row["n"] for row in rows}
 
 
+def _attach_creator_names(conn, questionnaires):
+    names_by_id = {row["id"]: row["full_name"] for row in conn.execute("SELECT id, full_name FROM users").fetchall()}
+    for q in questionnaires:
+        q["created_by_name"] = names_by_id.get(q["created_by"], q["created_by"])
+    return questionnaires
+
+
 def get_all_questionnaires():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM questionnaires ORDER BY rowid ASC").fetchall()]
     counts = _questionnaire_parameter_counts(conn)
     for row in rows:
         row["parameters_count"] = counts.get(row["id"], 0)
+    _attach_creator_names(conn, rows)
     conn.close()
     return rows
 
@@ -985,6 +1713,7 @@ def get_questionnaire(questionnaire_id: str):
     questionnaire = dict(row)
     questionnaire["parameters"] = _get_parameters_with_answers(conn, questionnaire_id)
     questionnaire["parameters_count"] = len(questionnaire["parameters"])
+    _attach_creator_names(conn, [questionnaire])
     conn.close()
     return questionnaire
 
@@ -1046,9 +1775,9 @@ def create_questionnaire(
         """
         INSERT INTO questionnaires
             (id, name, calculation_method, type, status, tone, version, description, created_date, created_by)
-        VALUES (?, ?, ?, 'מותאם', 'טיוטה', 'gray', 'v1', ?, ?, 'נופר טורגמן')
+        VALUES (?, ?, ?, 'מותאם', 'טיוטה', 'gray', 'v1', ?, ?, ?)
         """,
-        (id, name, calculation_method, description, created_date),
+        (id, name, calculation_method, description, created_date, DEFAULT_CREATED_BY),
     )
     _replace_questionnaire_parameters(conn, id, parameters)
     conn.commit()
@@ -1108,9 +1837,9 @@ def duplicate_questionnaire(source_id: str, new_id: str, new_name: str, created_
         """
         INSERT INTO questionnaires
             (id, name, calculation_method, type, status, tone, version, description, created_date, created_by)
-        VALUES (?, ?, ?, 'מותאם', 'טיוטה', 'gray', 'v1', ?, ?, 'נופר טורגמן')
+        VALUES (?, ?, ?, 'מותאם', 'טיוטה', 'gray', 'v1', ?, ?, ?)
         """,
-        (new_id, new_name, source["calculation_method"], source["description"], created_date),
+        (new_id, new_name, source["calculation_method"], source["description"], created_date, DEFAULT_CREATED_BY),
     )
     parameters = _get_parameters_with_answers(conn, source_id)
     _replace_questionnaire_parameters(conn, new_id, parameters)

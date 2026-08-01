@@ -60,10 +60,17 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
     domain: initial?.domain ?? DOMAIN_OPTIONS[0],
     owner: initial?.owner ?? "",
     description: initial?.description ?? "",
+    rating_scale_id: initial?.rating_scale_id ?? "",
   });
-  const [selectedIds, setSelectedIds] = useState(() => new Set(initial?.questionnaire_ids ?? []));
+  const [selected, setSelected] = useState(() =>
+    (initial?.questionnaires ?? (initial?.questionnaire_ids ?? []).map((id) => ({ id, weight: 0 }))).map((q) => ({
+      ...q,
+    }))
+  );
   const [questionnaires, setQuestionnaires] = useState([]);
   const [questionnaireSearch, setQuestionnaireSearch] = useState("");
+  const [users, setUsers] = useState([]);
+  const [ratingScales, setRatingScales] = useState([]);
   const [fieldErrors, setFieldErrors] = useState(new Set());
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -72,6 +79,14 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
     api
       .getQuestionnaires()
       .then((res) => setQuestionnaires(res.rows))
+      .catch((err) => setError(err.message));
+    api
+      .getUsers()
+      .then((res) => setUsers(res.rows))
+      .catch((err) => setError(err.message));
+    api
+      .getRatingScales()
+      .then((res) => setRatingScales(res.rows))
       .catch((err) => setError(err.message));
   }, []);
 
@@ -88,13 +103,36 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
   }, [questionnaires, questionnaireSearch]);
 
   function toggleQuestionnaire(id) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+    setSelected((prev) => {
+      if (prev.some((q) => q.id === id)) return prev.filter((q) => q.id !== id);
+      return [...prev, { id, weight: 0 }];
+    });
+  }
+
+  function setWeight(id, weight) {
+    setSelected((prev) => prev.map((q) => (q.id === id ? { ...q, weight } : q)));
+  }
+
+  function moveQuestionnaire(index, direction) {
+    setSelected((prev) => {
+      const next = [...prev];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
   }
+
+  function removeSelected(id) {
+    setSelected((prev) => prev.filter((q) => q.id !== id));
+  }
+
+  const totalWeight = selected.reduce((sum, q) => sum + (Number(q.weight) || 0), 0);
+  const questionnaireById = useMemo(() => {
+    const map = new Map();
+    questionnaires.forEach((q) => map.set(q.id, q));
+    return map;
+  }, [questionnaires]);
 
   function validateStep1() {
     const missing = new Set(REQUIRED_FIELDS.filter((f) => !form[f].trim()));
@@ -121,7 +159,8 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
       domain: form.domain,
       owner: form.owner.trim(),
       description: form.description.trim() || null,
-      questionnaire_ids: Array.from(selectedIds),
+      questionnaires: selected.map((q) => ({ id: q.id, weight: Number(q.weight) || 0 })),
+      rating_scale_id: form.rating_scale_id || null,
     };
     try {
       const saved =
@@ -146,7 +185,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
         zIndex: 100,
       }}
     >
-      <div style={{ background: "#fff", borderRadius: 10, width: 460, maxWidth: "90vw", padding: 22 }}>
+      <div style={{ background: "#fff", borderRadius: 10, width: step === 2 ? 620 : 460, maxWidth: "90vw", padding: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-dark)", display: "flex", gap: 8, alignItems: "center" }}>
             {title} <span>{mode === "create" ? "➕" : "✎"}</span>
@@ -254,7 +293,54 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
               </select>
             </div>
 
-            <Field label="בעלים" required invalid={fieldErrors.has("owner")} value={form.owner} onChange={set("owner")} />
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>בעלים *</div>
+              {fieldErrors.has("owner") && (
+                <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ שדה חובה</div>
+              )}
+              <select
+                value={form.owner}
+                onChange={set("owner")}
+                style={{
+                  width: "100%",
+                  border: `1px solid ${fieldErrors.has("owner") ? "#e0a0a0" : "var(--border)"}`,
+                  borderRadius: 6,
+                  padding: "9px 12px",
+                  fontSize: 13,
+                  background: "#fff",
+                }}
+              >
+                <option value="">–</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.full_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>סולם דירוג</div>
+              <select
+                value={form.rating_scale_id}
+                onChange={set("rating_scale_id")}
+                style={{
+                  width: "100%",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  padding: "9px 12px",
+                  fontSize: 13,
+                  background: "#fff",
+                }}
+              >
+                <option value="">–</option>
+                {ratingScales.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             <div style={{ marginBottom: 6 }}>
               <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>תיאור</div>
@@ -279,8 +365,109 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
         {step === 2 && (
           <>
             <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 12 }}>
-              סמן שאלונים קיימים לקישור למודל.
+              סמן שאלונים קיימים לקישור למודל, קבע את סדר הצגתם ואת המשקל (%) של כל שאלון בציון הסופי.
             </div>
+
+            {selected.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 12.5, color: "var(--text-mid)" }}>שאלונים נבחרים (לפי סדר הצגה)</div>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      padding: "2px 10px",
+                      borderRadius: 12,
+                      background: totalWeight === 100 ? "#e3f3e6" : "#fbe9e9",
+                      color: totalWeight === 100 ? "#1e7a34" : "#b52d2d",
+                    }}
+                  >
+                    סה"כ משקל: {totalWeight}%
+                  </span>
+                </div>
+                <div style={{ border: "1px solid var(--border)", borderRadius: 6 }}>
+                  {selected.map((sel, i) => {
+                    const q = questionnaireById.get(sel.id);
+                    return (
+                      <div
+                        key={sel.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: "8px 12px",
+                          borderBottom: i < selected.length - 1 ? "1px solid var(--border)" : "none",
+                          fontSize: 13,
+                        }}
+                      >
+                        <div style={{ display: "flex", flexDirection: "column" }}>
+                          <button
+                            type="button"
+                            onClick={() => moveQuestionnaire(i, -1)}
+                            disabled={i === 0}
+                            aria-label="הזז למעלה"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              cursor: i === 0 ? "default" : "pointer",
+                              color: i === 0 ? "#c7ccd4" : "var(--text-mid)",
+                              lineHeight: 1,
+                              fontSize: 12,
+                            }}
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moveQuestionnaire(i, 1)}
+                            disabled={i === selected.length - 1}
+                            aria-label="הזז למטה"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              cursor: i === selected.length - 1 ? "default" : "pointer",
+                              color: i === selected.length - 1 ? "#c7ccd4" : "var(--text-mid)",
+                              lineHeight: 1,
+                              fontSize: 12,
+                            }}
+                          >
+                            ▼
+                          </button>
+                        </div>
+                        <span style={{ color: "var(--text-light)", fontSize: 12, minWidth: 14 }}>{i + 1}</span>
+                        <span style={{ fontWeight: 600, color: "var(--text-dark)", whiteSpace: "nowrap" }}>{sel.id}</span>
+                        <span style={{ color: "var(--text-mid)", flex: 1 }}>{q?.description ?? ""}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={sel.weight}
+                          onChange={(e) => setWeight(sel.id, Number(e.target.value))}
+                          style={{
+                            width: 60,
+                            border: "1px solid var(--border)",
+                            borderRadius: 6,
+                            padding: "6px 8px",
+                            fontSize: 13,
+                            textAlign: "center",
+                          }}
+                        />
+                        <span style={{ color: "var(--text-mid)" }}>%</span>
+                        <button
+                          type="button"
+                          onClick={() => removeSelected(sel.id)}
+                          aria-label="הסר שאלון"
+                          style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <input
               type="text"
               placeholder="חיפוש שאלון..."
@@ -314,7 +501,11 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
                     cursor: "pointer",
                   }}
                 >
-                  <input type="checkbox" checked={selectedIds.has(q.id)} onChange={() => toggleQuestionnaire(q.id)} />
+                  <input
+                    type="checkbox"
+                    checked={selected.some((s) => s.id === q.id)}
+                    onChange={() => toggleQuestionnaire(q.id)}
+                  />
                   <span style={{ fontWeight: 600, color: "var(--text-dark)", whiteSpace: "nowrap" }}>{q.id}</span>
                   <span style={{ color: "var(--text-mid)" }}>{q.description}</span>
                 </label>

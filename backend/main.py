@@ -34,10 +34,10 @@ NAV_ITEMS = [
     {"id": "issuers", "label": "מנפיקים"},
     {"id": "assets", "label": "נכסים"},
     {"id": "models", "label": "מודלים"},
+    {"id": "rating-scales", "label": "סולמות דירוג"},
     {"id": "questionnaires", "label": "שאלונים"},
     {"id": "matrices", "label": "מטריצות"},
     {"id": "teams", "label": "צוותים"},
-    {"id": "system", "label": "מערכת"},
     {"id": "users", "label": "משתמשים"},
     {"id": "audit-log", "label": "יומן ביקורת"},
 ]
@@ -72,6 +72,28 @@ class IssuerInput(BaseModel):
     country: Optional[str] = None
 
 
+class AssetInput(BaseModel):
+    id: str
+    name: str
+    type: Optional[str] = None
+    issuer_id: Optional[str] = None
+    cycle_stage: Optional[str] = None
+
+
+class TeamInput(BaseModel):
+    id: str
+    name: str
+    type: Optional[str] = None
+    process_kind: Optional[str] = None
+    committee_submission: bool = False
+    validity_tracking: bool = False
+
+
+class ModelQuestionnaireInput(BaseModel):
+    id: str
+    weight: int = 0
+
+
 class ModelInput(BaseModel):
     id: str
     name: str
@@ -79,7 +101,21 @@ class ModelInput(BaseModel):
     domain: str
     owner: str
     description: Optional[str] = None
-    questionnaire_ids: List[str] = []
+    questionnaires: List[ModelQuestionnaireInput] = []
+    rating_scale_id: Optional[str] = None
+
+
+class RatingScaleLevelInput(BaseModel):
+    label: str
+    min_value: float
+    max_value: float
+
+
+class RatingScaleInput(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    levels: List[RatingScaleLevelInput] = []
 
 
 class ParameterInput(BaseModel):
@@ -147,11 +183,14 @@ NAV_COUNTS = {
     "report": database.count_rankings,
     "processes": database.count_processes,
     "issuers": database.count_issuers,
+    "assets": database.count_assets,
     "models": database.count_models,
+    "rating-scales": database.count_rating_scales,
     "questionnaires": database.count_questionnaires,
     "approvals": lambda: database.count_rankings_by_status("ממתין לאישור"),
     "users": database.count_users,
     "matrices": database.count_matrices,
+    "teams": database.count_teams,
 }
 
 
@@ -218,6 +257,38 @@ def get_processes():
     }
 
 
+class ProcessCreateInput(BaseModel):
+    model_id: str
+    kind: str
+    framework_issuer_id: Optional[str] = None
+    framework_asset_id: Optional[str] = None
+    data_date: Optional[str] = None
+
+
+@app.post("/api/processes", status_code=201)
+def create_process(payload: ProcessCreateInput):
+    if payload.kind not in ("מנפיק", "נכס"):
+        raise HTTPException(status_code=422, detail="סוג מסגרת לא תקין")
+    if not database.get_model(payload.model_id):
+        raise HTTPException(status_code=422, detail="מודל דירוג לא נמצא")
+    if payload.kind == "מנפיק":
+        if not payload.framework_issuer_id or not database.get_issuer(payload.framework_issuer_id):
+            raise HTTPException(status_code=422, detail="יש לבחור מנפיק קיים")
+        framework_asset_id = None
+    else:
+        asset = database.get_asset(payload.framework_asset_id or "")
+        if not asset:
+            raise HTTPException(status_code=422, detail="יש לבחור נכס קיים")
+        framework_asset_id = asset["id"]
+    return database.create_ranking_process(
+        model_id=payload.model_id,
+        kind=payload.kind,
+        framework_issuer_id=payload.framework_issuer_id,
+        framework_asset_id=framework_asset_id,
+        data_date=payload.data_date,
+    )
+
+
 @app.get("/api/issuers")
 def get_issuers():
     """Everything the issuers page needs in one call."""
@@ -272,6 +343,96 @@ def delete_issuer(issuer_id: str):
     database.delete_issuer(issuer_id)
 
 
+@app.get("/api/assets")
+def get_assets():
+    """Everything the assets page needs in one call."""
+    rows = database.get_all_assets()
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "last_updated": date.today().isoformat(),
+    }
+
+
+def _clean_asset_input(payload: AssetInput):
+    asset_id = payload.id.strip()
+    name = payload.name.strip()
+    if not asset_id or not name:
+        raise HTTPException(status_code=422, detail="קוד נכס ושם נכס הם שדות חובה")
+    return {
+        "id": asset_id,
+        "name": name,
+        "type": (payload.type or "").strip() or None,
+        "issuer_id": (payload.issuer_id or "").strip() or None,
+        "cycle_stage": (payload.cycle_stage or "").strip() or None,
+    }
+
+
+@app.post("/api/assets", status_code=201)
+def create_asset(payload: AssetInput):
+    cleaned = _clean_asset_input(payload)
+    if database.asset_code_taken(cleaned["id"]):
+        raise HTTPException(status_code=409, detail="נכס עם קוד זה כבר קיים")
+    return database.create_asset(**cleaned)
+
+
+@app.put("/api/assets/{asset_id}")
+def update_asset(asset_id: str, payload: AssetInput):
+    if not database.get_asset(asset_id):
+        raise HTTPException(status_code=404, detail="נכס לא נמצא")
+    cleaned = _clean_asset_input(payload)
+    if database.asset_code_taken(cleaned["id"], exclude_id=asset_id):
+        raise HTTPException(status_code=409, detail="נכס עם קוד זה כבר קיים")
+    return database.update_asset(asset_id, **cleaned)
+
+
+@app.get("/api/teams")
+def get_teams():
+    rows = database.get_all_teams()
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "last_updated": date.today().isoformat(),
+    }
+
+
+def _clean_team_input(payload: TeamInput):
+    team_id = payload.id.strip()
+    name = payload.name.strip()
+    if not team_id or not name:
+        raise HTTPException(status_code=422, detail="קוד צוות ושם צוות הם שדות חובה")
+    return {
+        "id": team_id,
+        "name": name,
+        "type": (payload.type or "").strip() or None,
+        "process_kind": (payload.process_kind or "").strip() or None,
+        "committee_submission": payload.committee_submission,
+        "validity_tracking": payload.validity_tracking,
+    }
+
+
+@app.post("/api/teams", status_code=201)
+def create_team(payload: TeamInput):
+    cleaned = _clean_team_input(payload)
+    if database.team_code_taken(cleaned["id"]):
+        raise HTTPException(status_code=409, detail="צוות עם קוד זה כבר קיים")
+    if database.team_name_taken(cleaned["name"]):
+        raise HTTPException(status_code=409, detail="צוות עם שם זה כבר קיים")
+    return database.create_team(**cleaned)
+
+
+@app.put("/api/teams/{team_id}")
+def update_team(team_id: str, payload: TeamInput):
+    if not database.get_team(team_id):
+        raise HTTPException(status_code=404, detail="צוות לא נמצא")
+    cleaned = _clean_team_input(payload)
+    if database.team_code_taken(cleaned["id"], exclude_id=team_id):
+        raise HTTPException(status_code=409, detail="צוות עם קוד זה כבר קיים")
+    if database.team_name_taken(cleaned["name"], exclude_id=team_id):
+        raise HTTPException(status_code=409, detail="צוות עם שם זה כבר קיים")
+    return database.update_team(team_id, **cleaned)
+
+
 @app.get("/api/models")
 def get_models():
     """Everything the models page needs in one call."""
@@ -291,6 +452,11 @@ def _clean_model_input(payload: ModelInput):
     owner = payload.owner.strip()
     if not model_id or not name or not family or not domain or not owner:
         raise HTTPException(status_code=422, detail="כל השדות הם שדות חובה")
+    questionnaires = [
+        {"id": q.id.strip(), "weight": max(0, min(100, q.weight))}
+        for q in payload.questionnaires
+        if q.id.strip()
+    ]
     return {
         "id": model_id,
         "name": name,
@@ -298,7 +464,8 @@ def _clean_model_input(payload: ModelInput):
         "domain": domain,
         "owner": owner,
         "description": (payload.description or "").strip() or None,
-        "questionnaire_ids": payload.questionnaire_ids,
+        "questionnaires": questionnaires,
+        "rating_scale_id": (payload.rating_scale_id or "").strip() or None,
     }
 
 
@@ -329,6 +496,74 @@ def delete_model(model_id: str):
     if not database.get_model(model_id):
         raise HTTPException(status_code=404, detail="מודל לא נמצא")
     database.delete_model(model_id)
+
+
+@app.get("/api/rating-scales")
+def get_rating_scales():
+    rows = database.get_all_rating_scales()
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "last_updated": date.today().isoformat(),
+    }
+
+
+@app.get("/api/rating-scales/{rating_scale_id}")
+def get_rating_scale(rating_scale_id: str):
+    scale = database.get_rating_scale(rating_scale_id)
+    if not scale:
+        raise HTTPException(status_code=404, detail="סולם דירוג לא נמצא")
+    return scale
+
+
+def _clean_rating_scale_input(payload: RatingScaleInput):
+    scale_id = payload.id.strip()
+    name = payload.name.strip()
+    if not scale_id or not name:
+        raise HTTPException(status_code=422, detail="קוד סולם ושם סולם הם שדות חובה")
+    levels = []
+    for lvl in payload.levels:
+        label = lvl.label.strip()
+        if not label:
+            continue
+        if lvl.min_value > lvl.max_value:
+            raise HTTPException(status_code=422, detail=f"טווח לא תקין עבור '{label}': המינימום גדול מהמקסימום")
+        levels.append({"label": label, "min_value": lvl.min_value, "max_value": lvl.max_value})
+    return {
+        "id": scale_id,
+        "name": name,
+        "description": (payload.description or "").strip() or None,
+        "levels": levels,
+    }
+
+
+@app.post("/api/rating-scales", status_code=201)
+def create_rating_scale(payload: RatingScaleInput):
+    cleaned = _clean_rating_scale_input(payload)
+    if database.rating_scale_code_taken(cleaned["id"]):
+        raise HTTPException(status_code=409, detail="סולם דירוג עם קוד זה כבר קיים")
+    if database.rating_scale_name_taken(cleaned["name"]):
+        raise HTTPException(status_code=409, detail="סולם דירוג עם שם זה כבר קיים")
+    return database.create_rating_scale(**cleaned)
+
+
+@app.put("/api/rating-scales/{rating_scale_id}")
+def update_rating_scale(rating_scale_id: str, payload: RatingScaleInput):
+    if not database.get_rating_scale(rating_scale_id):
+        raise HTTPException(status_code=404, detail="סולם דירוג לא נמצא")
+    cleaned = _clean_rating_scale_input(payload)
+    if database.rating_scale_code_taken(cleaned["id"], exclude_id=rating_scale_id):
+        raise HTTPException(status_code=409, detail="סולם דירוג עם קוד זה כבר קיים")
+    if database.rating_scale_name_taken(cleaned["name"], exclude_id=rating_scale_id):
+        raise HTTPException(status_code=409, detail="סולם דירוג עם שם זה כבר קיים")
+    return database.update_rating_scale(rating_scale_id, **cleaned)
+
+
+@app.delete("/api/rating-scales/{rating_scale_id}", status_code=204)
+def delete_rating_scale(rating_scale_id: str):
+    if not database.get_rating_scale(rating_scale_id):
+        raise HTTPException(status_code=404, detail="סולם דירוג לא נמצא")
+    database.delete_rating_scale(rating_scale_id)
 
 
 @app.get("/api/questionnaires")
