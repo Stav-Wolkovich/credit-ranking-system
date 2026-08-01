@@ -9,6 +9,7 @@ const COLUMNS = [
   "משפחה",
   "תחום",
   "בעלים",
+  "סולם דירוג",
   "גרסה פעילה",
   "גרסאות",
   "מקטעים / שאלונים",
@@ -154,7 +155,8 @@ export default function ModelsPage() {
                 <td style={{ padding: "12px 16px" }}>{r.name}</td>
                 <td style={{ padding: "12px 16px" }}>{r.family}</td>
                 <td style={{ padding: "12px 16px" }}>{r.domain}</td>
-                <td style={{ padding: "12px 16px" }}>{r.owner}</td>
+                <td style={{ padding: "12px 16px" }}>{r.owner_name}</td>
+                <td style={{ padding: "12px 16px" }}>{r.rating_scale_name ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.active_version}</td>
                 <td style={{ padding: "12px 16px" }}>{r.versions_count}</td>
                 <td style={{ padding: "12px 16px" }}>

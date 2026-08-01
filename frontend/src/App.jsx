@@ -6,8 +6,14 @@ import { PlaceholderPage, ErrorBanner } from "./components/ui.jsx";
 import ReportPage from "./pages/ReportPage.jsx";
 import ProcessesPage from "./pages/ProcessesPage.jsx";
 import IssuersPage from "./pages/IssuersPage.jsx";
+import AssetsPage from "./pages/AssetsPage.jsx";
 import ModelsPage from "./pages/ModelsPage.jsx";
 import QuestionnairesPage from "./pages/QuestionnairesPage.jsx";
+import ApprovalsPage from "./pages/ApprovalsPage.jsx";
+import UsersPage from "./pages/UsersPage.jsx";
+import MatricesPage from "./pages/MatricesPage.jsx";
+import TeamsPage from "./pages/TeamsPage.jsx";
+import RatingScalesPage from "./pages/RatingScalesPage.jsx";
 
 const FALLBACK_NAV = [{ id: "report", label: "דוח דירוג פנימי", count: 12 }];
 
@@ -19,10 +25,22 @@ function PageContent({ page, navItems }) {
       return <ProcessesPage />;
     case "issuers":
       return <IssuersPage />;
+    case "assets":
+      return <AssetsPage />;
     case "models":
       return <ModelsPage />;
     case "questionnaires":
       return <QuestionnairesPage />;
+    case "approvals":
+      return <ApprovalsPage />;
+    case "users":
+      return <UsersPage />;
+    case "matrices":
+      return <MatricesPage />;
+    case "teams":
+      return <TeamsPage />;
+    case "rating-scales":
+      return <RatingScalesPage />;
     default: {
       const item = navItems.find((n) => n.id === page);
       return <PlaceholderPage label={item ? item.label : ""} />;

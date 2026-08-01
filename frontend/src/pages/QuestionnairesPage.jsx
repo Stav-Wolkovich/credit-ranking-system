@@ -150,7 +150,7 @@ export default function QuestionnairesPage() {
                 <td style={{ padding: "12px 16px" }}>{r.parameters_count}</td>
                 <td style={{ padding: "12px 16px" }}>{r.calculation_method}</td>
                 <td style={{ padding: "12px 16px" }}>{r.created_date}</td>
-                <td style={{ padding: "12px 16px" }}>{r.created_by}</td>
+                <td style={{ padding: "12px 16px" }}>{r.created_by_name}</td>
                 <td style={{ padding: "12px 16px", display: "flex", gap: 10 }}>
                   <button
                     type="button"

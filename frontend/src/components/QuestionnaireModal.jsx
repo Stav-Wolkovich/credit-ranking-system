@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 
 const CALCULATION_METHOD_OPTIONS = ["ממוצע משוקלל", "סכום", "מטריצה", "מקסימום"];
-const PARAMETER_TYPE_OPTIONS = ["סובייקטיבי", "אובייקטיבי"];
+const PARAMETER_TYPE_OPTIONS = ["סובייקטיבי", "מזלג", "מטריצה", "כמותי", "מחושב", "מיפוי", "טקסט", "בוליאני"];
 
 function Field({ label, required, invalid, disabled, value, onChange }) {
   return (

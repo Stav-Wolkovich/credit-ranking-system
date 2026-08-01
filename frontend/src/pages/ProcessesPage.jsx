@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
+import ProcessModal from "../components/ProcessModal.jsx";
 
 const COLUMNS = ["מס' תהליך", "נושא הדירוג", "קוד", "מסגרת", "סטטוס", "ציון סופי", "דירוג סופי", "השלמה", ""];
 
@@ -8,25 +9,20 @@ export default function ProcessesPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const loadProcesses = useCallback(() => {
+    setLoading(true);
+    return api
+      .getProcesses()
+      .then((res) => setData(res))
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    api
-      .getProcesses()
-      .then((res) => {
-        if (!cancelled) setData(res);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    loadProcesses();
+  }, [loadProcesses]);
 
   const rows = data?.rows ?? [];
 
@@ -36,6 +32,7 @@ export default function ProcessesPage() {
         <PageHeader title="תהליכי דירוג" />
         <button
           type="button"
+          onClick={() => setModalOpen(true)}
           style={{
             background: "var(--accent)",
             color: "#fff",
@@ -105,6 +102,16 @@ export default function ProcessesPage() {
           </tbody>
         </table>
       </div>
+
+      {modalOpen && (
+        <ProcessModal
+          onCancel={() => setModalOpen(false)}
+          onSaved={() => {
+            setModalOpen(false);
+            loadProcesses();
+          }}
+        />
+      )}
     </div>
   );
 }
