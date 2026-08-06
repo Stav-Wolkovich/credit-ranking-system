@@ -28,7 +28,14 @@ final_rating, computed_score, computed_rating, completion — same
 issuer-linked subject/framework as rankings, joined the same way by
 get_all_processes(). computed_* is the model's raw output; final_* is
 what was actually approved (a committee can approve a different rating
-than the one computed).
+than the one computed). ranking_processes doesn't store model_id/team_id
+itself; get_processes_by_status() joins those in from the matching
+rankings row via _attach_process_context() for display.
+
+The תור אישורים (approvals queue) page is a two-stage workflow over
+ranking_processes.status: "בתהליך" (awaiting manager review) →
+approve_manager moves it to "ממתין לוועדה" (awaiting committee review) →
+approve_committee moves it to "אושר בוועדה" (final).
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active.
@@ -1275,6 +1282,58 @@ def get_process(process_id: str):
     _attach_issuer_display_names(conn, [process])
     conn.close()
     return process
+
+
+def _attach_process_context(conn, processes):
+    """ranking_processes doesn't store model_id/team_id itself — the
+    matching rankings row (same id) does, since they're two views of the
+    same תהליך. Pull in display names for the approvals queue."""
+    context_by_id = {
+        row["id"]: row for row in conn.execute("SELECT id, model_id, team_id FROM rankings").fetchall()
+    }
+    models_by_id = {
+        row["id"]: f"{row['name']} {row['active_version']}"
+        for row in conn.execute("SELECT id, name, active_version FROM models").fetchall()
+    }
+    teams_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM teams").fetchall()}
+    for p in processes:
+        ctx = context_by_id.get(p["id"])
+        p["model"] = models_by_id.get(ctx["model_id"]) if ctx else None
+        p["team"] = teams_by_id.get(ctx["team_id"]) if ctx else None
+    return processes
+
+
+def get_processes_by_status(status: str):
+    """Real data backing the תור אישורים queue's two tabs."""
+    conn = get_connection()
+    rows = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM ranking_processes WHERE status = ? ORDER BY id DESC", (status,)
+        ).fetchall()
+    ]
+    _attach_issuer_display_names(conn, rows)
+    _attach_process_context(conn, rows)
+    conn.close()
+    return rows
+
+
+def count_processes_by_status(status: str):
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM ranking_processes WHERE status = ?", (status,)).fetchone()[0]
+    conn.close()
+    return count
+
+
+def update_process_status(process_id: str, status: str, tone: str):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET status = ?, tone = ? WHERE id = ?",
+        (status, tone, process_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_process(process_id)
 
 
 def _next_process_id():

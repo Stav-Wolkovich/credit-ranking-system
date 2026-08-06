@@ -210,7 +210,9 @@ NAV_COUNTS = {
     "models": database.count_models,
     "rating-scales": database.count_rating_scales,
     "questionnaires": database.count_questionnaires,
-    "approvals": lambda: database.count_rankings_by_status("ממתין לאישור"),
+    "approvals": lambda: (
+        database.count_processes_by_status("בתהליך") + database.count_processes_by_status("ממתין לוועדה")
+    ),
     "users": database.count_users,
     "matrices": database.count_matrices,
     "teams": database.count_teams,
@@ -246,14 +248,38 @@ def get_expiring_soon(expiring_within_days: int = Query(default=60, ge=0)):
     }
 
 
-@app.get("/api/approvals")
-def get_approvals():
-    """Rankings currently sitting in the ממתין לאישור status."""
-    rows = database.get_rankings_by_status("ממתין לאישור")
-    return {
-        "rows": rows,
-        "total": len(rows),
-    }
+@app.get("/api/approvals/manager")
+def get_manager_approvals():
+    """Processes awaiting review by a manager (stage 1 of the approvals queue)."""
+    rows = database.get_processes_by_status("בתהליך")
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.get("/api/approvals/committee")
+def get_committee_approvals():
+    """Processes awaiting review by the ועדה (stage 2 of the approvals queue)."""
+    rows = database.get_processes_by_status("ממתין לוועדה")
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.post("/api/approvals/{process_id}/approve-manager")
+def approve_manager(process_id: str):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "בתהליך":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור מנהל")
+    return database.update_process_status(process_id, "ממתין לוועדה", "amber")
+
+
+@app.post("/api/approvals/{process_id}/approve-committee")
+def approve_committee(process_id: str):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "ממתין לוועדה":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור ועדה")
+    return database.update_process_status(process_id, "אושר בוועדה", "green")
 
 
 @app.get("/api/report/rows/{process_id}")

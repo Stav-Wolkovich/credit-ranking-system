@@ -112,7 +112,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  getApprovals: () => request("/approvals"),
+  getManagerApprovals: () => request("/approvals/manager"),
+  getCommitteeApprovals: () => request("/approvals/committee"),
+  approveManagerProcess: (id) => request(`/approvals/${id}/approve-manager`, { method: "POST" }),
+  approveCommitteeProcess: (id) => request(`/approvals/${id}/approve-committee`, { method: "POST" }),
   getRoles: () => request("/roles"),
   createRole: (role) =>
     request("/roles", {
