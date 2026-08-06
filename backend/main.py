@@ -193,6 +193,10 @@ class ReportInput(BaseModel):
     export_formats: List[str] = ["PDF", "Excel"]
 
 
+class NotificationTypeEmailInput(BaseModel):
+    notification_email: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -218,6 +222,7 @@ NAV_COUNTS = {
     "teams": database.count_teams,
     "roles": database.count_roles,
     "reports": database.count_reports,
+    "audit-log": database.count_notifications,
 }
 
 
@@ -1043,3 +1048,27 @@ def export_report_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{report_id}.csv"'},
     )
+
+
+@app.get("/api/notification-types")
+def get_notification_types():
+    rows = database.get_all_notification_types()
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.put("/api/notification-types/{type_id}")
+def update_notification_type(type_id: str, payload: NotificationTypeEmailInput):
+    if not database.get_notification_type(type_id):
+        raise HTTPException(status_code=404, detail="סוג התראה לא נמצא")
+    email = (payload.notification_email or "").strip() or None
+    return database.update_notification_type_email(type_id, email)
+
+
+@app.get("/api/notifications")
+def get_notifications():
+    """The יומן ביקורת log. Refreshes the expiry-based notification types
+    first, since there's no real daily cron behind them (see
+    refresh_expiry_notifications)."""
+    database.refresh_expiry_notifications()
+    rows = database.get_all_notifications()
+    return {"rows": rows, "total": len(rows)}

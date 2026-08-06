@@ -170,4 +170,11 @@ export const api = {
     const qs = new URLSearchParams(params).toString();
     return request(`/reports/${id}/preview${qs ? `?${qs}` : ""}`);
   },
+  getNotificationTypes: () => request("/notification-types"),
+  updateNotificationType: (id, payload) =>
+    request(`/notification-types/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  getNotifications: () => request("/notifications"),
 };

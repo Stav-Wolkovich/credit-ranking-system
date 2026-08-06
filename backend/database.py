@@ -114,6 +114,26 @@ it's None for user-created reports, which fall back to showing their
 own purpose/content as the "preview". get_rating_summary_rows(),
 get_rating_expiry_rows(), and get_rating_distribution() compute that
 live data from the real rankings table.
+
+Notification types columns are the fields the יומן ביקורת page's
+"סוגי התראות" tab displays: id, name (תיאור), trigger_description
+(טריגר), recipient_role (נמען — descriptive, not a users.id link),
+channels (comma-separated: email/internal), timing, and
+notification_email — the one field the page lets you edit, i.e. the
+address that type's notifications would be mailed to. There's no SMTP
+integration in this app, so nothing actually gets emailed; the log
+just records which address a "email" channel notification would have
+gone to. notifications is the log itself (notification_type_id,
+entity_id, message, created_at, email_sent_to — a snapshot of the
+type's configured address at the time, or None if the channel didn't
+include email). Only four types are wired to real triggers: model
+updates (MODEL_CHANGED), a process reaching ממתין לוועדה
+(RATING_PENDING_COMMITTEE), and rating expiry, checked lazily on each
+notifications fetch rather than by a real daily cron
+(RATING_EXPIRING_30D/RATING_EXPIRED via refresh_expiry_notifications()).
+The remaining types (submission/return flows, backups, stuck-process
+tracking, unauthorized access) have no underlying data source in the
+app yet and are catalog-only.
 """
 import re
 import sqlite3
@@ -374,6 +394,97 @@ SEED_REPORT_ROWS = [
         "content": "גרף עוגה - התפלגות לפי דירוג (AAA-D). גרף עמודות - כמות לפי מודל. קו מגמה - שינויים לאורך זמן. מפת חום - דירוגים לפי מודל × דירוג.",
         "export_formats": "PDF,Excel,הדפסה",
         "report_type": "rating_distribution",
+    },
+]
+
+# id, name (תיאור), trigger_description (טריגר), recipient_role (נמען),
+# channels (ערוץ, comma-separated: email/internal), timing (תזמון).
+# is_live marks the types this session actually wires up to a real event —
+# the rest (submission/return flows, backups, stuck-process tracking, auth)
+# have no underlying data source in the app yet, so they stay defined here
+# (configurable, visible in the catalog) without ever generating a real
+# log entry, rather than faking history for events that never happened.
+SEED_NOTIFICATION_TYPE_ROWS = [
+    {
+        "id": "RATING_EXPIRING_30D",
+        "name": "תוקף דירוג עומד לפוג",
+        "trigger_description": "30 יום לפני שתוקף הדירוג עומד לפוג",
+        "recipient_role": "אנליסט",
+        "channels": "email,internal",
+        "timing": "יומי (06:00)",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_EXPIRED",
+        "name": "תוקף דירוג פג",
+        "trigger_description": "תאריך התפוגה עבר",
+        "recipient_role": "אנליסט + מנהל",
+        "channels": "email,internal",
+        "timing": "יומי (06:00)",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_SUBMITTED",
+        "name": "דירוג חדש נשלח לאישור",
+        "trigger_description": "אנליסט שלח דירוג לאישור",
+        "recipient_role": "מאשר",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_RETURNED",
+        "name": "דירוג הוחזר עם הערות",
+        "trigger_description": "מאשר החזיר דירוג עם הערות",
+        "recipient_role": "אנליסט",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_PENDING_COMMITTEE",
+        "name": "דירוג ממתין לוועדה",
+        "trigger_description": "מאשר אישר ונדרש אישור ועדה",
+        "recipient_role": "חברי ועדה",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "MODEL_CHANGED",
+        "name": "שינוי במודל",
+        "trigger_description": "מנהל דירוג שינה מטא-דאטה של מודל",
+        "recipient_role": "מנהל דירוג",
+        "channels": "internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "BACKUP_FAILED",
+        "name": "גיבוי כשל",
+        "trigger_description": "גיבוי אוטומטי של המערכת נכשל",
+        "recipient_role": "מנהל מערכת",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "PROCESS_STUCK",
+        "name": "תהליך תקוע",
+        "trigger_description": "תהליך בסטטוס בעבודה מעל 14 יום",
+        "recipient_role": "אנליסט + מנהל",
+        "channels": "email,internal",
+        "timing": "יומי",
+        "notification_email": None,
+    },
+    {
+        "id": "UNAUTHORIZED_ACCESS",
+        "name": "ניסיון גישה לא מורשה",
+        "trigger_description": "משתמש ניסה לגשת למערכת ללא הרשאה",
+        "recipient_role": "מנהל מערכת",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
     },
 ]
 
@@ -1063,6 +1174,44 @@ def init_db():
         )
         conn.commit()
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_types (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            trigger_description TEXT,
+            recipient_role TEXT,
+            channels TEXT NOT NULL DEFAULT 'internal',
+            timing TEXT,
+            notification_email TEXT
+        )
+        """
+    )
+    notification_type_count = conn.execute("SELECT COUNT(*) FROM notification_types").fetchone()[0]
+    if notification_type_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO notification_types
+                (id, name, trigger_description, recipient_role, channels, timing, notification_email)
+            VALUES (:id, :name, :trigger_description, :recipient_role, :channels, :timing, :notification_email)
+            """,
+            SEED_NOTIFICATION_TYPE_ROWS,
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notification_type_id TEXT NOT NULL REFERENCES notification_types(id),
+            entity_id TEXT,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            email_sent_to TEXT
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
 
@@ -1333,7 +1482,14 @@ def update_process_status(process_id: str, status: str, tone: str):
     )
     conn.commit()
     conn.close()
-    return get_process(process_id)
+    process = get_process(process_id)
+    if status == "ממתין לוועדה":
+        _create_notification(
+            "RATING_PENDING_COMMITTEE",
+            process_id,
+            f"התהליך {process_id} ({process['code']}) אושר על ידי מנהל וממתין כעת לאישור ועדה",
+        )
+    return process
 
 
 def _next_process_id():
@@ -1769,6 +1925,7 @@ def update_model(
         _replace_model_questionnaires(conn, id, questionnaires)
     conn.commit()
     conn.close()
+    _create_notification("MODEL_CHANGED", id, f"מודל \"{name}\" ({id}) עודכן")
     return get_model(id)
 
 
@@ -2768,3 +2925,112 @@ def get_entity_rating_detail(
     conn.close()
     rankings.sort(key=lambda r: (r["approval_date"] or "", r["id"]))
     return {"entity_kind": kind, "entity": entity, "rankings": rankings}
+
+
+def get_all_notification_types():
+    conn = get_connection()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM notification_types ORDER BY rowid ASC").fetchall()]
+    conn.close()
+    for row in rows:
+        row["channels"] = [c for c in (row["channels"] or "").split(",") if c]
+    return rows
+
+
+def get_notification_type(type_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM notification_types WHERE id = ?", (type_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    t = dict(row)
+    t["channels"] = [c for c in (t["channels"] or "").split(",") if c]
+    return t
+
+
+def update_notification_type_email(type_id: str, notification_email: str | None):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE notification_types SET notification_email = ? WHERE id = ?", (notification_email, type_id)
+    )
+    conn.commit()
+    conn.close()
+    return get_notification_type(type_id)
+
+
+def _create_notification(type_id: str, entity_id: str | None, message: str):
+    """Logs a real notification event to the יומן ביקורת. Never actually
+    sends an email (no SMTP integration exists) — email_sent_to just
+    records the address a mail-channel notification would have gone to,
+    snapshotted from the type's current configuration."""
+    conn = get_connection()
+    ntype = conn.execute("SELECT * FROM notification_types WHERE id = ?", (type_id,)).fetchone()
+    email_to = None
+    if ntype and "email" in (ntype["channels"] or "").split(","):
+        email_to = ntype["notification_email"]
+    conn.execute(
+        "INSERT INTO notifications (notification_type_id, entity_id, message, created_at, email_sent_to) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (type_id, entity_id, message, datetime.now().isoformat(timespec="seconds"), email_to),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _notification_already_logged_today(conn, type_id: str, entity_id: str):
+    today = date.today().isoformat()
+    row = conn.execute(
+        "SELECT 1 FROM notifications WHERE notification_type_id = ? AND entity_id = ? AND substr(created_at, 1, 10) = ?",
+        (type_id, entity_id, today),
+    ).fetchone()
+    return row is not None
+
+
+def refresh_expiry_notifications():
+    """Simulates the RATING_EXPIRING_30D/RATING_EXPIRED types' "יומי (06:00)"
+    schedule: there's no real cron here, so this scans for matches and logs
+    any that aren't already logged for today, called lazily whenever the
+    notification log is fetched."""
+    conn = get_connection()
+    rows = get_all_rankings()
+    for r in rows:
+        if r["status"] != "בתוקף" or not r["valid_until"]:
+            continue
+        valid_until = datetime.strptime(r["valid_until"], "%d/%m/%Y").date()
+        days_left = (valid_until - date.today()).days
+        if days_left < 0:
+            type_id = "RATING_EXPIRED"
+            msg = f"תוקף הדירוג של {r['subject']} ({r['code']}) פג ב-{r['valid_until']}"
+        elif days_left <= 30:
+            type_id = "RATING_EXPIRING_30D"
+            msg = f"תוקף הדירוג של {r['subject']} ({r['code']}) יפוג בעוד {days_left} ימים ({r['valid_until']})"
+        else:
+            continue
+        if not _notification_already_logged_today(conn, type_id, r["id"]):
+            conn.close()
+            _create_notification(type_id, r["id"], msg)
+            conn = get_connection()
+    conn.close()
+
+
+def get_all_notifications():
+    conn = get_connection()
+    rows = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM notifications ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+    ]
+    types_by_id = {t["id"]: t for t in conn.execute("SELECT * FROM notification_types").fetchall()}
+    conn.close()
+    for row in rows:
+        ntype = types_by_id.get(row["notification_type_id"])
+        row["type_name"] = ntype["name"] if ntype else row["notification_type_id"]
+        row["channels"] = [c for c in (ntype["channels"] or "").split(",") if c] if ntype else []
+    return rows
+
+
+def count_notifications():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]
+    conn.close()
+    return count
