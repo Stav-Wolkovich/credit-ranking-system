@@ -120,13 +120,14 @@ Notification types columns are the fields the יומן ביקורת page's
 (טריגר), recipient_role (נמען — descriptive, not a users.id link),
 channels (comma-separated: email/internal), timing, and
 notification_email — the one field the page lets you edit, i.e. the
-address that type's notifications would be mailed to. There's no SMTP
-integration in this app, so nothing actually gets emailed; the log
-just records which address a "email" channel notification would have
-gone to. notifications is the log itself (notification_type_id,
-entity_id, message, created_at, email_sent_to — a snapshot of the
-type's configured address at the time, or None if the channel didn't
-include email). Only four types are wired to real triggers: model
+address that type's notifications get mailed to. Real SMTP delivery is
+wired up via email_sender.py, configured through SMTP_* environment
+variables (see backend/.env.example) — with no .env present, sending
+degrades to a logged "not_configured" status rather than failing the
+action that triggered the notification. notifications is the log
+itself (notification_type_id, entity_id, message, created_at,
+email_sent_to, email_status: sent/failed/not_configured/None,
+email_error). Only four types are wired to real triggers: model
 updates (MODEL_CHANGED), a process reaching ממתין לוועדה
 (RATING_PENDING_COMMITTEE), and rating expiry, checked lazily on each
 notifications fetch rather than by a real daily cron
@@ -139,6 +140,8 @@ import re
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
+
+from . import email_sender
 
 DB_PATH = Path(__file__).parent / "rankings.db"
 
@@ -1207,10 +1210,16 @@ def init_db():
             entity_id TEXT,
             message TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            email_sent_to TEXT
+            email_sent_to TEXT,
+            email_status TEXT,
+            email_error TEXT
         )
         """
     )
+    notification_columns = {row["name"] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+    for col in ("email_status", "email_error"):
+        if col not in notification_columns:
+            conn.execute(f"ALTER TABLE notifications ADD COLUMN {col} TEXT")
 
     conn.commit()
     conn.close()
@@ -2958,19 +2967,33 @@ def update_notification_type_email(type_id: str, notification_email: str | None)
 
 
 def _create_notification(type_id: str, entity_id: str | None, message: str):
-    """Logs a real notification event to the יומן ביקורת. Never actually
-    sends an email (no SMTP integration exists) — email_sent_to just
-    records the address a mail-channel notification would have gone to,
-    snapshotted from the type's current configuration."""
+    """Logs a real notification event to the יומן ביקורת, and — for types
+    whose channel includes email and that have a notification_email
+    configured — actually sends it via SMTP (see email_sender.py).
+    email_status records what really happened: 'sent', 'failed' (with
+    email_error set), or 'not_configured' (email channel wanted but no
+    address set, or no SMTP_* env vars configured)."""
     conn = get_connection()
     ntype = conn.execute("SELECT * FROM notification_types WHERE id = ?", (type_id,)).fetchone()
     email_to = None
+    email_status = None
+    email_error = None
     if ntype and "email" in (ntype["channels"] or "").split(","):
         email_to = ntype["notification_email"]
+        if email_to:
+            sent, email_status, email_error = email_sender.send_email(
+                email_to, f"התראה: {ntype['name']}", message
+            )
+        else:
+            email_status = "not_configured"
     conn.execute(
-        "INSERT INTO notifications (notification_type_id, entity_id, message, created_at, email_sent_to) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (type_id, entity_id, message, datetime.now().isoformat(timespec="seconds"), email_to),
+        "INSERT INTO notifications "
+        "(notification_type_id, entity_id, message, created_at, email_sent_to, email_status, email_error) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            type_id, entity_id, message, datetime.now().isoformat(timespec="seconds"),
+            email_to, email_status, email_error,
+        ),
     )
     conn.commit()
     conn.close()

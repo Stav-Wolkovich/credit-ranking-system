@@ -7,6 +7,13 @@ data store.
 """
 import csv
 import io
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Loaded before anything reads SMTP_* env vars — real credentials live in
+# backend/.env (gitignored), never in source control.
+load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware

@@ -3,10 +3,26 @@ import { api } from "../api.js";
 import { PageHeader, ErrorBanner } from "../components/ui.jsx";
 import NotificationTypeEmailModal from "../components/NotificationTypeEmailModal.jsx";
 
-const LOG_COLUMNS = ["תאריך ושעה", "סוג התראה", "הודעה", "ערוצים", "נשלח לאימייל"];
+const LOG_COLUMNS = ["תאריך ושעה", "סוג התראה", "הודעה", "ערוצים", "אימייל", "סטטוס שליחה"];
 const TYPE_COLUMNS = ["תיאור", "טריגר", "נמען", "ערוץ", "תזמון", "אימייל להתראות", "פעולות"];
 
 const CHANNEL_LABELS = { email: "אימייל", internal: "פנימי" };
+
+const EMAIL_STATUS_STYLES = {
+  sent: { label: "נשלח", color: "#1e7e3c" },
+  failed: { label: "נכשל", color: "#b52d2d" },
+  not_configured: { label: "לא מוגדר", color: "var(--text-light)" },
+};
+
+function EmailStatus({ status, error }) {
+  if (!status) return <span style={{ color: "var(--text-light)" }}>-</span>;
+  const style = EMAIL_STATUS_STYLES[status] ?? { label: status, color: "var(--text-mid)" };
+  return (
+    <span style={{ color: style.color, fontWeight: 600 }} title={error ?? undefined}>
+      {style.label}
+    </span>
+  );
+}
 
 const TABS = [
   { id: "log", label: "יומן התראות" },
@@ -96,6 +112,9 @@ function NotificationLogTab() {
                 <td style={{ padding: "12px 16px", color: "var(--text-mid)" }} dir="ltr">
                   {r.email_sent_to ?? "-"}
                 </td>
+                <td style={{ padding: "12px 16px" }}>
+                  <EmailStatus status={r.email_status} error={r.email_error} />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -139,7 +158,7 @@ function NotificationTypesTab() {
           marginBottom: 14,
         }}
       >
-        אין במערכת זו חיבור לשרת דואר — התראות בערוץ אימייל נרשמות ביומן עם כתובת היעד המוגדרת, אך לא נשלח מייל בפועל.
+התראות בערוץ אימייל נשלחות בפועל דרך שרת SMTP המוגדר בקובץ ההגדרות של השרת. אם אין הגדרת SMTP, ההתראה תירשם ביומן עם סטטוס "לא מוגדר" ולא תישלח.
       </div>
 
       {error && <ErrorBanner message={error} />}
