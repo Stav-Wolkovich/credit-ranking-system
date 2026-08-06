@@ -112,11 +112,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  getApprovals: () => request("/approvals"),
+  getManagerApprovals: () => request("/approvals/manager"),
+  getCommitteeApprovals: () => request("/approvals/committee"),
+  approveManagerProcess: (id) => request(`/approvals/${id}/approve-manager`, { method: "POST" }),
+  approveCommitteeProcess: (id) => request(`/approvals/${id}/approve-committee`, { method: "POST" }),
   getRoles: () => request("/roles"),
   createRole: (role) =>
     request("/roles", {
       method: "POST",
+      body: JSON.stringify(role),
+    }),
+  updateRole: (id, role) =>
+    request(`/roles/${id}`, {
+      method: "PUT",
       body: JSON.stringify(role),
     }),
   getUsers: () => request("/users"),
@@ -147,4 +155,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  getReports: () => request("/reports"),
+  createReport: (report) =>
+    request("/reports", {
+      method: "POST",
+      body: JSON.stringify(report),
+    }),
+  updateReport: (id, report) =>
+    request(`/reports/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(report),
+    }),
+  previewReport: (id, params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/reports/${id}/preview${qs ? `?${qs}` : ""}`);
+  },
+  getNotificationTypes: () => request("/notification-types"),
+  updateNotificationType: (id, payload) =>
+    request(`/notification-types/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  getNotifications: () => request("/notifications"),
 };

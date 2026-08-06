@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
 import UserModal from "../components/UserModal.jsx";
-import RoleModal from "../components/RoleModal.jsx";
 
 const COLUMNS = ["שם מלא", "תפקידים", "פעיל", "פעולות"];
 
@@ -36,11 +35,11 @@ function RolePill({ children }) {
 
 export default function UsersPage() {
   const [data, setData] = useState(null);
+  const [roles, setRoles] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [userModal, setUserModal] = useState(null);
-  const [roleModalOpen, setRoleModalOpen] = useState(false);
 
   const loadUsers = useCallback(() => {
     setLoading(true);
@@ -54,6 +53,21 @@ export default function UsersPage() {
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
+
+  useEffect(() => {
+    api
+      .getRoles()
+      .then((res) => setRoles(res.rows))
+      .catch(() => {});
+  }, []);
+
+  const roleNameById = useMemo(() => {
+    const map = {};
+    roles.forEach((r) => {
+      map[r.id] = r.name || r.id;
+    });
+    return map;
+  }, [roles]);
 
   const rows = data?.rows ?? [];
 
@@ -75,23 +89,6 @@ export default function UsersPage() {
             onChange={(e) => setSearch(e.target.value)}
             style={{ ...selectStyle, width: 180 }}
           />
-          <button
-            type="button"
-            onClick={() => setRoleModalOpen(true)}
-            style={{
-              background: "#fff",
-              color: "var(--accent)",
-              border: "1px solid var(--accent)",
-              borderRadius: 6,
-              padding: "9px 16px",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            + צור תפקיד
-          </button>
           <button
             type="button"
             onClick={() => setUserModal({ mode: "create" })}
@@ -147,7 +144,9 @@ export default function UsersPage() {
                   {r.role_ids.length === 0 ? (
                     "-"
                   ) : (
-                    r.role_ids.map((roleId) => <RolePill key={roleId}>{roleId}</RolePill>)
+                    r.role_ids.map((roleId) => (
+                      <RolePill key={roleId}>{roleNameById[roleId] ?? roleId}</RolePill>
+                    ))
                   )}
                 </td>
                 <td style={{ padding: "12px 16px" }}>
@@ -179,10 +178,6 @@ export default function UsersPage() {
             loadUsers();
           }}
         />
-      )}
-
-      {roleModalOpen && (
-        <RoleModal onCancel={() => setRoleModalOpen(false)} onSaved={() => setRoleModalOpen(false)} />
       )}
     </div>
   );

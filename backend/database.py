@@ -28,7 +28,14 @@ final_rating, computed_score, computed_rating, completion — same
 issuer-linked subject/framework as rankings, joined the same way by
 get_all_processes(). computed_* is the model's raw output; final_* is
 what was actually approved (a committee can approve a different rating
-than the one computed).
+than the one computed). ranking_processes doesn't store model_id/team_id
+itself; get_processes_by_status() joins those in from the matching
+rankings row via _attach_process_context() for display.
+
+The תור אישורים (approvals queue) page is a two-stage workflow over
+ranking_processes.status: "בתהליך" (awaiting manager review) →
+approve_manager moves it to "ממתין לוועדה" (awaiting committee review) →
+approve_committee moves it to "אושר בוועדה" (final).
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active.
@@ -76,8 +83,13 @@ parameter_answers holds the ranked answer options for a parameter
 
 Users columns are the fields the users page displays: id (username),
 full_name, email, active. user_roles links a user to the roles
-assigned to them (user_id, role_id). Roles columns are: id (code,
-e.g. RISK_MODEL_BUILDER), description.
+assigned to them (user_id, role_id).
+
+Roles columns are the fields the roles permission-matrix page displays:
+id (AD group code, e.g. RATING_ADMIN), name (Hebrew display name),
+name_en, description, and seven boolean permission flags (can_view,
+can_create, can_edit, can_delete, can_approve, can_committee_approve,
+can_rerun) rendered as the matrix's checkmark columns.
 
 Matrices columns are the fields the matrices page displays: id (matrix
 code), name, type (e.g. רשת 2D), model_id (the model the matrix belongs
@@ -90,11 +102,46 @@ get_matrix() attaches x_values/y_values (ordered label lists) and
 cell_values (a row_position-major 2D array) when a grid has been
 defined; cells is derived from len(x_values) * len(y_values) once a
 grid exists, otherwise it stays a manually entered count.
+
+Reports columns are the fields the reports (דוחות) catalog page
+displays: id (report code, e.g. RPT-001), title, purpose (מטרה),
+content (תוכן — free text describing what the report contains),
+export_formats (comma-separated, e.g. "PDF,Excel,הדפסה"), and
+report_type. report_type selects which live-data engine backs preview
+and export for the 6 default reports (rating_detail, rating_summary,
+rating_comparison, audit_trail, rating_expiry, rating_distribution);
+it's None for user-created reports, which fall back to showing their
+own purpose/content as the "preview". get_rating_summary_rows(),
+get_rating_expiry_rows(), and get_rating_distribution() compute that
+live data from the real rankings table.
+
+Notification types columns are the fields the יומן ביקורת page's
+"סוגי התראות" tab displays: id, name (תיאור), trigger_description
+(טריגר), recipient_role (נמען — descriptive, not a users.id link),
+channels (comma-separated: email/internal), timing, and
+notification_email — the one field the page lets you edit, i.e. the
+address that type's notifications get mailed to. Real SMTP delivery is
+wired up via email_sender.py, configured through SMTP_* environment
+variables (see backend/.env.example) — with no .env present, sending
+degrades to a logged "not_configured" status rather than failing the
+action that triggered the notification. notifications is the log
+itself (notification_type_id, entity_id, message, created_at,
+email_sent_to, email_status: sent/failed/not_configured/None,
+email_error). Only four types are wired to real triggers: model
+updates (MODEL_CHANGED), a process reaching ממתין לוועדה
+(RATING_PENDING_COMMITTEE), and rating expiry, checked lazily on each
+notifications fetch rather than by a real daily cron
+(RATING_EXPIRING_30D/RATING_EXPIRED via refresh_expiry_notifications()).
+The remaining types (submission/return flows, backups, stuck-process
+tracking, unauthorized access) have no underlying data source in the
+app yet and are catalog-only.
 """
 import re
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+
+from . import email_sender
 
 DB_PATH = Path(__file__).parent / "rankings.db"
 
@@ -128,32 +175,32 @@ SEED_PROCESS_ROWS = [
 ]
 
 SEED_ISSUER_ROWS = [
-    {"id": "10000364", "name": "A", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000399", "name": "B", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000479", "name": "C", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000365", "name": "D", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000484", "name": "E", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000366", "name": "F", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000367", "name": "G", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000368", "name": "H", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000530", "name": "I", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000497", "name": "J", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000380", "name": "K", "type": None, "sector": None, "country": None, "active": True},
-    {"id": "10000381", "name": "L", "type": None, "sector": None, "country": None, "active": True},
-    {"id": "10000382", "name": "M", "type": None, "sector": None, "country": None, "active": True},
+    {"id": "10000364", "name": "WALL STREET 60", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000399", "name": "Allianz Archimedes SUZIE INVESTMENT", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000479", "name": "Allianz – Centinela", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000365", "name": "Allianz euNetworks Holdings Limited", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000484", "name": "Allianz - Financiere Vendome II Diam Coc (EPC 3)", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000366", "name": "Allianz - Porterbrook Ulfstead Midco Limited", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000367", "name": "Allianz - project hercules", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000368", "name": "Allianz - Project Runde", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000530", "name": "Allianz - Rotera TRENDBELL DESIGNATED ACTIVITY COMPANY", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000497", "name": "Allianz (EPC 3) – Mehler", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000380", "name": "חשבון מנוהל - Fuse Funding", "type": None, "sector": None, "country": None, "active": True},
+    {"id": "10000381", "name": "Third Ave", "type": None, "sector": None, "country": None, "active": True},
+    {"id": "10000382", "name": "Constellation", "type": None, "sector": None, "country": None, "active": True},
 ]
 
 SEED_ASSET_ROWS = [
-    {"id": "737", "name": "A", "type": "FRAMEWORK", "issuer_id": "10000380", "cycle_stage": None, "active": True},
-    {"id": "445", "name": "B", "type": "FRAMEWORK", "issuer_id": "10000381", "cycle_stage": None, "active": True},
-    {"id": "166", "name": "C", "type": "FRAMEWORK", "issuer_id": "10000364", "cycle_stage": None, "active": True},
-    {"id": "455", "name": "D", "type": "FRAMEWORK", "issuer_id": "10000399", "cycle_stage": None, "active": True},
-    {"id": "729", "name": "E", "type": "FRAMEWORK", "issuer_id": "10000382", "cycle_stage": None, "active": True},
-    {"id": "598", "name": "F", "type": "FRAMEWORK", "issuer_id": "10000484", "cycle_stage": None, "active": True},
-    {"id": "486", "name": "G", "type": "FRAMEWORK", "issuer_id": "10000367", "cycle_stage": None, "active": True},
-    {"id": "615", "name": "H", "type": "FRAMEWORK", "issuer_id": "10000497", "cycle_stage": None, "active": True},
-    {"id": "407", "name": "I", "type": "FRAMEWORK", "issuer_id": "10000368", "cycle_stage": None, "active": True},
-    {"id": "762", "name": "J", "type": "FRAMEWORK", "issuer_id": "10000530", "cycle_stage": None, "active": True},
+    {"id": "737", "name": "Real Estate Development LOAN A, LLC 1002", "type": "FRAMEWORK", "issuer_id": "10000380", "cycle_stage": None, "active": True},
+    {"id": "445", "name": "Third Owners LLC-Building 368", "type": "FRAMEWORK", "issuer_id": "10000381", "cycle_stage": None, "active": True},
+    {"id": "166", "name": "wall owner lp 60", "type": "FRAMEWORK", "issuer_id": "10000364", "cycle_stage": None, "active": True},
+    {"id": "455", "name": "Allianz Archimedes SUZIE INVESTMENT", "type": "FRAMEWORK", "issuer_id": "10000399", "cycle_stage": None, "active": True},
+    {"id": "729", "name": "Allianz – Constellation", "type": "FRAMEWORK", "issuer_id": "10000382", "cycle_stage": None, "active": True},
+    {"id": "598", "name": "Allianz - Diam Coc (EPC 3)", "type": "FRAMEWORK", "issuer_id": "10000484", "cycle_stage": None, "active": True},
+    {"id": "486", "name": "Allianz - project hercules 21.12.22", "type": "FRAMEWORK", "issuer_id": "10000367", "cycle_stage": None, "active": True},
+    {"id": "615", "name": "Allianz - Project Impulse (EPC 3)", "type": "FRAMEWORK", "issuer_id": "10000497", "cycle_stage": None, "active": False},
+    {"id": "407", "name": "Allianz - Project Runde", "type": "FRAMEWORK", "issuer_id": "10000368", "cycle_stage": None, "active": True},
+    {"id": "762", "name": "Allianz - Rotera TRENDBELL DESIGNATED ACTIVITY COMPANY", "type": "FRAMEWORK", "issuer_id": "10000530", "cycle_stage": None, "active": True},
 ]
 
 SEED_MODEL_ROWS = [
@@ -213,10 +260,64 @@ SEED_ANSWER_TEXTS = [
 ]
 
 SEED_ROLE_ROWS = [
-    {"id": "RISK_MODEL_BUILDER", "description": None},
-    {"id": "META_DATA_ADMIN", "description": None},
-    {"id": "RATING_ANALYST", "description": None},
+    {
+        "id": "AD_RATING_ANALYST",
+        "name": "אנליסט דירוג",
+        "name_en": "Rating Analyst",
+        "description": "פתיחת תהליכי דירוג, מילוי שאלונים, הזנת נתונים כמותיים, שליחה לאישור",
+        "can_view": True, "can_create": True, "can_edit": True, "can_delete": False,
+        "can_approve": False, "can_committee_approve": False, "can_rerun": False,
+    },
+    {
+        "id": "RATING_APPROVER",
+        "name": "מאשר דירוג",
+        "name_en": "Rating Approver",
+        "description": "בדיקת דירוגים, אישור או החזרה עם הערות. הפרדת סמכויות - לא יכול לאשר דירוג שהוא עצמו יצר",
+        "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
+        "can_approve": True, "can_committee_approve": False, "can_rerun": False,
+    },
+    {
+        "id": "RATING_COMMITTEE",
+        "name": "חבר ועדת דירוג",
+        "name_en": "Rating Committee",
+        "description": "אישור סופי של דירוגים הדורשים אישור ועדה",
+        "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
+        "can_approve": False, "can_committee_approve": True, "can_rerun": False,
+    },
+    {
+        "id": "RATING_ADMIN",
+        "name": "מנהל דירוג",
+        "name_en": "Rating Admin",
+        "description": "ניהול כל המטא-דאטה: מודלים, שאלונים, פרמטרים, תשובות, נוסחאות, מטריצות, טבלאות המרה",
+        "can_view": True, "can_create": True, "can_edit": True, "can_delete": True,
+        "can_approve": False, "can_committee_approve": False, "can_rerun": True,
+    },
+    {
+        "id": "RATING_VIEWER",
+        "name": "צופה",
+        "name_en": "Viewer",
+        "description": "צפייה בלבד בדירוגים, דוחות ולוח בקרה",
+        "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
+        "can_approve": False, "can_committee_approve": False, "can_rerun": False,
+    },
+    {
+        "id": "RATING_SYSADMIN",
+        "name": "מנהל מערכת",
+        "name_en": "System Admin",
+        "description": "ניהול טכני - ג'ובים, אודיט, הרשאות, הגדרות מערכת",
+        "can_view": True, "can_create": True, "can_edit": True, "can_delete": True,
+        "can_approve": False, "can_committee_approve": False, "can_rerun": True,
+    },
 ]
+
+# One-time migration: earlier seed data used these 3 placeholder role
+# codes before the real default roles (above) were defined. Any user
+# still linked to one of these gets remapped to its closest replacement.
+LEGACY_ROLE_REMAP = {
+    "RISK_MODEL_BUILDER": "RATING_ADMIN",
+    "META_DATA_ADMIN": "RATING_ADMIN",
+    "RATING_ANALYST": "AD_RATING_ANALYST",
+}
 
 # There's no login/session system yet, so newly created or duplicated
 # questionnaires are attributed to this fixed user id (joined to their
@@ -246,6 +347,148 @@ SEED_MATRIX_ROWS = [
     {"id": "TEST2", "name": "test 2", "type": "רשת 2D", "model_id": "RE-PROJ", "axes": 2, "cells": 4},
     {"id": "TEST-3", "name": "TEST", "type": "רשת 2D", "model_id": "PROJ-FIN", "axes": 2, "cells": 24},
     {"id": "TEST-CLONE", "name": "שכפול", "type": "רשת 2D", "model_id": "PROJ-FIN", "axes": 2, "cells": 20},
+]
+
+SEED_REPORT_ROWS = [
+    {
+        "id": "RPT-001",
+        "title": "דו\"ח דירוג פרטני עבור מנפיק נתון",
+        "purpose": "דו\"ח מפורט של תהליך דירוג בודד",
+        "content": "פרטי מנפיק/נכס, פרטי מודל, ציון כולל ודירוג, ציוני קבוצות שאלונים, פירוט כל תשובה עם ציון, היסטוריית אישורים, מסלול אודיט",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_detail",
+    },
+    {
+        "id": "RPT-002",
+        "title": "דו\"ח סיכום דירוגים",
+        "purpose": "סיכום כל הדירוגים הפעילים במערכת",
+        "content": "טבלה עם כל הדירוגים, סינון לפי: מודל, סטטוס, טווח תאריכים, דירוג. קיבוץ לפי מודל/דירוג/סטטוס. סטטיסטיקות סיכום.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_summary",
+    },
+    {
+        "id": "RPT-003",
+        "title": "דו\"ח השוואת דירוגים",
+        "purpose": "השוואת דירוגים Side-by-Side עבור אותו מנפיק/נכס לאורך זמן",
+        "content": "בחירת מנפיק/נכס ושני תאריכים. הצגה זה לצד זה. הדגשת שינויים: ירוק=שיפור, אדום=הרעה. ניתן להשוות גם יותר משני תאריכים, כדי לראות התפתחות דירוגים וציונים על פני זמן.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_comparison",
+    },
+    {
+        "id": "RPT-004",
+        "title": "דו\"ח אודיט",
+        "purpose": "דו\"ח מסלול ביקורת - כל הפעולות במערכת",
+        "content": "סינון לפי: משתמש, ישות, פעולה, טווח תאריכים. עמודות: תאריך/שעה, משתמש, פעולה, ישות, שדה, ערך ישן, ערך חדש, IP, Session.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "audit_trail",
+    },
+    {
+        "id": "RPT-005",
+        "title": "דו\"ח תוקף דירוגים",
+        "purpose": "מעקב אחר תפוגת דירוגים",
+        "content": "דירוגים שפג תוקפם, דירוגים שיפוגו ב-30/60/90 יום. סטטיסטיקות תפוגה, תחזית. מיון לפי דחיפות.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_expiry",
+    },
+    {
+        "id": "RPT-006",
+        "title": "דו\"ח התפלגות דירוגים",
+        "purpose": "ניתוח סטטיסטי של התפלגות הדירוגים",
+        "content": "גרף עוגה - התפלגות לפי דירוג (AAA-D). גרף עמודות - כמות לפי מודל. קו מגמה - שינויים לאורך זמן. מפת חום - דירוגים לפי מודל × דירוג.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_distribution",
+    },
+]
+
+# id, name (תיאור), trigger_description (טריגר), recipient_role (נמען),
+# channels (ערוץ, comma-separated: email/internal), timing (תזמון).
+# is_live marks the types this session actually wires up to a real event —
+# the rest (submission/return flows, backups, stuck-process tracking, auth)
+# have no underlying data source in the app yet, so they stay defined here
+# (configurable, visible in the catalog) without ever generating a real
+# log entry, rather than faking history for events that never happened.
+SEED_NOTIFICATION_TYPE_ROWS = [
+    {
+        "id": "RATING_EXPIRING_30D",
+        "name": "תוקף דירוג עומד לפוג",
+        "trigger_description": "30 יום לפני שתוקף הדירוג עומד לפוג",
+        "recipient_role": "אנליסט",
+        "channels": "email,internal",
+        "timing": "יומי (06:00)",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_EXPIRED",
+        "name": "תוקף דירוג פג",
+        "trigger_description": "תאריך התפוגה עבר",
+        "recipient_role": "אנליסט + מנהל",
+        "channels": "email,internal",
+        "timing": "יומי (06:00)",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_SUBMITTED",
+        "name": "דירוג חדש נשלח לאישור",
+        "trigger_description": "אנליסט שלח דירוג לאישור",
+        "recipient_role": "מאשר",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_RETURNED",
+        "name": "דירוג הוחזר עם הערות",
+        "trigger_description": "מאשר החזיר דירוג עם הערות",
+        "recipient_role": "אנליסט",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_PENDING_COMMITTEE",
+        "name": "דירוג ממתין לוועדה",
+        "trigger_description": "מאשר אישר ונדרש אישור ועדה",
+        "recipient_role": "חברי ועדה",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "MODEL_CHANGED",
+        "name": "שינוי במודל",
+        "trigger_description": "מנהל דירוג שינה מטא-דאטה של מודל",
+        "recipient_role": "מנהל דירוג",
+        "channels": "internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "BACKUP_FAILED",
+        "name": "גיבוי כשל",
+        "trigger_description": "גיבוי אוטומטי של המערכת נכשל",
+        "recipient_role": "מנהל מערכת",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "PROCESS_STUCK",
+        "name": "תהליך תקוע",
+        "trigger_description": "תהליך בסטטוס בעבודה מעל 14 יום",
+        "recipient_role": "אנליסט + מנהל",
+        "channels": "email,internal",
+        "timing": "יומי",
+        "notification_email": None,
+    },
+    {
+        "id": "UNAUTHORIZED_ACCESS",
+        "name": "ניסיון גישה לא מורשה",
+        "trigger_description": "משתמש ניסה לגשת למערכת ללא הרשאה",
+        "recipient_role": "מנהל מערכת",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
 ]
 
 
@@ -758,16 +1001,67 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS roles (
             id TEXT PRIMARY KEY,
-            description TEXT
+            name TEXT,
+            name_en TEXT,
+            description TEXT,
+            can_view INTEGER NOT NULL DEFAULT 0,
+            can_create INTEGER NOT NULL DEFAULT 0,
+            can_edit INTEGER NOT NULL DEFAULT 0,
+            can_delete INTEGER NOT NULL DEFAULT 0,
+            can_approve INTEGER NOT NULL DEFAULT 0,
+            can_committee_approve INTEGER NOT NULL DEFAULT 0,
+            can_rerun INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    role_columns = {row["name"] for row in conn.execute("PRAGMA table_info(roles)").fetchall()}
+    for col, ddl in [
+        ("name", "TEXT"),
+        ("name_en", "TEXT"),
+        ("can_view", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_create", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_edit", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_delete", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_approve", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_committee_approve", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_rerun", "INTEGER NOT NULL DEFAULT 0"),
+    ]:
+        if col not in role_columns:
+            conn.execute(f"ALTER TABLE roles ADD COLUMN {col} {ddl}")
+
     role_count = conn.execute("SELECT COUNT(*) FROM roles").fetchone()[0]
     if role_count == 0:
         conn.executemany(
-            "INSERT INTO roles (id, description) VALUES (:id, :description)", SEED_ROLE_ROWS
+            """
+            INSERT INTO roles (id, name, name_en, description, can_view, can_create, can_edit,
+                                can_delete, can_approve, can_committee_approve, can_rerun)
+            VALUES (:id, :name, :name_en, :description, :can_view, :can_create, :can_edit,
+                    :can_delete, :can_approve, :can_committee_approve, :can_rerun)
+            """,
+            SEED_ROLE_ROWS,
         )
         conn.commit()
+    else:
+        existing_role_ids = {row["id"] for row in conn.execute("SELECT id FROM roles").fetchall()}
+        new_role_ids = {r["id"] for r in SEED_ROLE_ROWS}
+        if not (new_role_ids & existing_role_ids):
+            for old_id, new_id in LEGACY_ROLE_REMAP.items():
+                conn.execute("UPDATE OR IGNORE user_roles SET role_id = ? WHERE role_id = ?", (new_id, old_id))
+                conn.execute("DELETE FROM user_roles WHERE role_id = ?", (old_id,))
+            conn.execute(
+                "DELETE FROM roles WHERE id IN ({})".format(",".join("?" * len(LEGACY_ROLE_REMAP))),
+                list(LEGACY_ROLE_REMAP.keys()),
+            )
+            conn.executemany(
+                """
+                INSERT INTO roles (id, name, name_en, description, can_view, can_create, can_edit,
+                                    can_delete, can_approve, can_committee_approve, can_rerun)
+                VALUES (:id, :name, :name_en, :description, :can_view, :can_create, :can_edit,
+                        :can_delete, :can_approve, :can_committee_approve, :can_rerun)
+                """,
+                SEED_ROLE_ROWS,
+            )
+            conn.commit()
 
     conn.execute(
         """
@@ -859,6 +1153,73 @@ def init_db():
         """
     )
     _seed_budget_matrix_grid(conn)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reports (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            purpose TEXT,
+            content TEXT,
+            export_formats TEXT NOT NULL DEFAULT 'PDF,Excel',
+            report_type TEXT
+        )
+        """
+    )
+    report_count = conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+    if report_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO reports (id, title, purpose, content, export_formats, report_type)
+            VALUES (:id, :title, :purpose, :content, :export_formats, :report_type)
+            """,
+            SEED_REPORT_ROWS,
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_types (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            trigger_description TEXT,
+            recipient_role TEXT,
+            channels TEXT NOT NULL DEFAULT 'internal',
+            timing TEXT,
+            notification_email TEXT
+        )
+        """
+    )
+    notification_type_count = conn.execute("SELECT COUNT(*) FROM notification_types").fetchone()[0]
+    if notification_type_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO notification_types
+                (id, name, trigger_description, recipient_role, channels, timing, notification_email)
+            VALUES (:id, :name, :trigger_description, :recipient_role, :channels, :timing, :notification_email)
+            """,
+            SEED_NOTIFICATION_TYPE_ROWS,
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notification_type_id TEXT NOT NULL REFERENCES notification_types(id),
+            entity_id TEXT,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            email_sent_to TEXT,
+            email_status TEXT,
+            email_error TEXT
+        )
+        """
+    )
+    notification_columns = {row["name"] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+    for col in ("email_status", "email_error"):
+        if col not in notification_columns:
+            conn.execute(f"ALTER TABLE notifications ADD COLUMN {col} TEXT")
 
     conn.commit()
     conn.close()
@@ -1078,6 +1439,65 @@ def get_process(process_id: str):
     process = dict(row)
     _attach_issuer_display_names(conn, [process])
     conn.close()
+    return process
+
+
+def _attach_process_context(conn, processes):
+    """ranking_processes doesn't store model_id/team_id itself — the
+    matching rankings row (same id) does, since they're two views of the
+    same תהליך. Pull in display names for the approvals queue."""
+    context_by_id = {
+        row["id"]: row for row in conn.execute("SELECT id, model_id, team_id FROM rankings").fetchall()
+    }
+    models_by_id = {
+        row["id"]: f"{row['name']} {row['active_version']}"
+        for row in conn.execute("SELECT id, name, active_version FROM models").fetchall()
+    }
+    teams_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM teams").fetchall()}
+    for p in processes:
+        ctx = context_by_id.get(p["id"])
+        p["model"] = models_by_id.get(ctx["model_id"]) if ctx else None
+        p["team"] = teams_by_id.get(ctx["team_id"]) if ctx else None
+    return processes
+
+
+def get_processes_by_status(status: str):
+    """Real data backing the תור אישורים queue's two tabs."""
+    conn = get_connection()
+    rows = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM ranking_processes WHERE status = ? ORDER BY id DESC", (status,)
+        ).fetchall()
+    ]
+    _attach_issuer_display_names(conn, rows)
+    _attach_process_context(conn, rows)
+    conn.close()
+    return rows
+
+
+def count_processes_by_status(status: str):
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM ranking_processes WHERE status = ?", (status,)).fetchone()[0]
+    conn.close()
+    return count
+
+
+def update_process_status(process_id: str, status: str, tone: str):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET status = ?, tone = ? WHERE id = ?",
+        (status, tone, process_id),
+    )
+    conn.commit()
+    conn.close()
+    process = get_process(process_id)
+    if status == "ממתין לוועדה":
+        _create_notification(
+            "RATING_PENDING_COMMITTEE",
+            process_id,
+            f"התהליך {process_id} ({process['code']}) אושר על ידי מנהל וממתין כעת לאישור ועדה",
+        )
     return process
 
 
@@ -1514,6 +1934,7 @@ def update_model(
         _replace_model_questionnaires(conn, id, questionnaires)
     conn.commit()
     conn.close()
+    _create_notification("MODEL_CHANGED", id, f"מודל \"{name}\" ({id}) עודכן")
     return get_model(id)
 
 
@@ -1847,18 +2268,30 @@ def duplicate_questionnaire(source_id: str, new_id: str, new_name: str, created_
     conn.close()
 
 
+ROLE_PERMISSION_FIELDS = [
+    "can_view", "can_create", "can_edit", "can_delete",
+    "can_approve", "can_committee_approve", "can_rerun",
+]
+
+
+def _cast_role_permissions(role):
+    for field in ROLE_PERMISSION_FIELDS:
+        role[field] = bool(role[field])
+    return role
+
+
 def get_all_roles():
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM roles ORDER BY rowid ASC").fetchall()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM roles ORDER BY rowid ASC").fetchall()]
     conn.close()
-    return [dict(row) for row in rows]
+    return [_cast_role_permissions(r) for r in rows]
 
 
 def get_role(role_id: str):
     conn = get_connection()
     row = conn.execute("SELECT * FROM roles WHERE id = ?", (role_id,)).fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _cast_role_permissions(dict(row)) if row else None
 
 
 def count_roles():
@@ -1868,16 +2301,87 @@ def count_roles():
     return count
 
 
-def role_code_taken(code: str):
+def role_code_taken(code: str, exclude_id: str | None = None):
     conn = get_connection()
-    row = conn.execute("SELECT 1 FROM roles WHERE id = ?", (code,)).fetchone()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM roles WHERE id = ? AND id != ?", (code, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM roles WHERE id = ?", (code,)).fetchone()
     conn.close()
     return row is not None
 
 
-def create_role(id: str, description: str | None):
+def role_name_taken(name: str, exclude_id: str | None = None):
     conn = get_connection()
-    conn.execute("INSERT INTO roles (id, description) VALUES (?, ?)", (id, description))
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM roles WHERE name = ? AND id != ?", (name, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM roles WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_role(
+    id: str,
+    name: str,
+    name_en: str | None,
+    description: str | None,
+    can_view: bool,
+    can_create: bool,
+    can_edit: bool,
+    can_delete: bool,
+    can_approve: bool,
+    can_committee_approve: bool,
+    can_rerun: bool,
+):
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO roles (id, name, name_en, description, can_view, can_create, can_edit,
+                            can_delete, can_approve, can_committee_approve, can_rerun)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            id, name, name_en, description,
+            int(can_view), int(can_create), int(can_edit), int(can_delete),
+            int(can_approve), int(can_committee_approve), int(can_rerun),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return get_role(id)
+
+
+def update_role(
+    original_id: str,
+    id: str,
+    name: str,
+    name_en: str | None,
+    description: str | None,
+    can_view: bool,
+    can_create: bool,
+    can_edit: bool,
+    can_delete: bool,
+    can_approve: bool,
+    can_committee_approve: bool,
+    can_rerun: bool,
+):
+    conn = get_connection()
+    conn.execute(
+        """
+        UPDATE roles SET id = ?, name = ?, name_en = ?, description = ?, can_view = ?, can_create = ?,
+            can_edit = ?, can_delete = ?, can_approve = ?, can_committee_approve = ?, can_rerun = ?
+        WHERE id = ?
+        """,
+        (
+            id, name, name_en, description,
+            int(can_view), int(can_create), int(can_edit), int(can_delete),
+            int(can_approve), int(can_committee_approve), int(can_rerun),
+            original_id,
+        ),
+    )
+    if original_id != id:
+        conn.execute("UPDATE user_roles SET role_id = ? WHERE role_id = ?", (id, original_id))
     conn.commit()
     conn.close()
     return get_role(id)
@@ -2208,3 +2712,348 @@ def duplicate_matrix(source_id: str, new_id: str, new_name: str):
     conn.commit()
     conn.close()
     return get_matrix(new_id)
+
+
+def get_all_reports():
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM reports ORDER BY rowid ASC").fetchall()]
+    conn.close()
+    for row in rows:
+        row["export_formats"] = [f for f in (row["export_formats"] or "").split(",") if f]
+    return rows
+
+
+def count_reports():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_report(report_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    report = dict(row)
+    report["export_formats"] = [f for f in (report["export_formats"] or "").split(",") if f]
+    return report
+
+
+def report_code_taken(code: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM reports WHERE id = ? AND id != ?", (code, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM reports WHERE id = ?", (code,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def report_title_taken(title: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM reports WHERE title = ? AND id != ?", (title, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM reports WHERE title = ?", (title,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_report(id: str, title: str, purpose: str | None, content: str | None, export_formats: list[str]):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO reports (id, title, purpose, content, export_formats, report_type) VALUES (?, ?, ?, ?, ?, NULL)",
+        (id, title, purpose, content, ",".join(export_formats)),
+    )
+    conn.commit()
+    conn.close()
+    return get_report(id)
+
+
+def update_report(
+    original_id: str, id: str, title: str, purpose: str | None, content: str | None, export_formats: list[str]
+):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE reports SET id = ?, title = ?, purpose = ?, content = ?, export_formats = ? WHERE id = ?",
+        (id, title, purpose, content, ",".join(export_formats), original_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_report(id)
+
+
+def get_rating_summary_rows():
+    """Real data backing RPT-002 (דו"ח סיכום דירוגים): every ranking with its
+    current model/team/status/rating, straight from the rankings table."""
+    rows = get_all_rankings()
+    return [
+        {
+            "code": r["code"],
+            "subject": r["subject"],
+            "model": r["model"],
+            "team": r["team"],
+            "status": r["status"],
+            "computed_rating": r["computed_rating"] or "-",
+            "final_rating": r["final_rating"] or "-",
+        }
+        for r in rows
+    ]
+
+
+def get_rating_expiry_rows():
+    """Real data backing RPT-005 (דו"ח תוקף דירוגים): every בתוקף ranking with
+    its days-until-expiry and an urgency bucket, sorted most-urgent first."""
+    today = date.today()
+    rows = get_all_rankings()
+    out = []
+    for r in rows:
+        if r["status"] != "בתוקף" or not r["valid_until"]:
+            continue
+        valid_until = datetime.strptime(r["valid_until"], "%d/%m/%Y").date()
+        days_left = (valid_until - today).days
+        if days_left <= 0:
+            urgency = "פג תוקף"
+        elif days_left <= 30:
+            urgency = "דחוף (30 יום)"
+        elif days_left <= 60:
+            urgency = "בקרוב (60 יום)"
+        elif days_left <= 90:
+            urgency = "קרב (90 יום)"
+        else:
+            urgency = "תקין"
+        out.append(
+            {
+                "code": r["code"],
+                "subject": r["subject"],
+                "model": r["model"],
+                "valid_until": r["valid_until"],
+                "days_left": days_left,
+                "urgency": urgency,
+            }
+        )
+    out.sort(key=lambda x: x["days_left"])
+    return out
+
+
+def get_rating_distribution():
+    """Real data backing RPT-006 (דו"ח התפלגות דירוגים): rating and model
+    counts across every ranking, computed from the rankings table."""
+    rows = get_all_rankings()
+    by_rating: dict[str, int] = {}
+    by_model: dict[str, int] = {}
+    for r in rows:
+        rating = r["final_rating"] or r["computed_rating"]
+        if rating:
+            by_rating[rating] = by_rating.get(rating, 0) + 1
+        if r["model"]:
+            by_model[r["model"]] = by_model.get(r["model"], 0) + 1
+    return {"by_rating": by_rating, "by_model": by_model}
+
+
+def _questionnaire_groups_for_model(conn, model_id: str):
+    """The questionnaire groups (and their weights) assigned to a model —
+    real structural data, standing in for RPT-001's 'ציוני קבוצות שאלונים'
+    since the system doesn't store per-ranking submitted answers/scores."""
+    if not model_id:
+        return []
+    rows = conn.execute(
+        """
+        SELECT q.name, mq.weight FROM model_questionnaires mq
+        JOIN questionnaires q ON q.id = mq.questionnaire_id
+        WHERE mq.model_id = ? ORDER BY mq.position ASC
+        """,
+        (model_id,),
+    ).fetchall()
+    return [{"name": r["name"], "weight": r["weight"]} for r in rows]
+
+
+def get_entity_rating_detail(
+    kind: str, entity_id: str, date_from: str | None = None, date_to: str | None = None
+):
+    """Real data backing RPT-001 (per-entity detail) and RPT-003 (compare
+    over time) for a selected מנפיק/נכס: the entity's own details plus
+    every ranking process where it's the framework being rated, each with
+    its model's questionnaire-group weights. Returns None if the entity
+    itself isn't found. Approval-history and audit-trail data aren't
+    modeled anywhere in the system yet, so callers should treat their
+    absence as "not available" rather than synthesize it.
+
+    date_from/date_to (ISO yyyy-mm-dd) restrict the result to rankings
+    approved within that window — RPT-003's time-frame selection. Rankings
+    with no approval_date (drafts/in-progress) have no point in time to
+    place on that timeline, so a date filter excludes them; leaving both
+    unset returns every matching ranking regardless of approval status."""
+    if kind == "מנפיק":
+        entity = get_issuer(entity_id)
+    elif kind == "נכס":
+        entity = get_asset(entity_id)
+    else:
+        return None
+    if not entity:
+        return None
+
+    conn = get_connection()
+    all_rows = get_all_rankings()
+    matches = [
+        r
+        for r in all_rows
+        if (kind == "מנפיק" and r["framework_issuer_id"] == entity_id)
+        or (kind == "נכס" and r["framework_asset_id"] == entity_id)
+    ]
+    if date_from or date_to:
+        matches = [
+            r
+            for r in matches
+            if r["approval_date"]
+            and (not date_from or r["approval_date"] >= date_from)
+            and (not date_to or r["approval_date"] <= date_to)
+        ]
+    rankings = []
+    for r in matches:
+        rankings.append(
+            {
+                "id": r["id"],
+                "code": r["code"],
+                "subject": r["subject"],
+                "model": r["model"],
+                "team": r["team"],
+                "status": r["status"],
+                "computed_score": r["computed_score"],
+                "computed_rating": r["computed_rating"],
+                "final_score": r["final_score"],
+                "final_rating": r["final_rating"],
+                "approval_date": r["approval_date"],
+                "valid_from": r["valid_from"],
+                "valid_until": r["valid_until"],
+                "questionnaire_groups": _questionnaire_groups_for_model(conn, r["model_id"]),
+            }
+        )
+    conn.close()
+    rankings.sort(key=lambda r: (r["approval_date"] or "", r["id"]))
+    return {"entity_kind": kind, "entity": entity, "rankings": rankings}
+
+
+def get_all_notification_types():
+    conn = get_connection()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM notification_types ORDER BY rowid ASC").fetchall()]
+    conn.close()
+    for row in rows:
+        row["channels"] = [c for c in (row["channels"] or "").split(",") if c]
+    return rows
+
+
+def get_notification_type(type_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM notification_types WHERE id = ?", (type_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    t = dict(row)
+    t["channels"] = [c for c in (t["channels"] or "").split(",") if c]
+    return t
+
+
+def update_notification_type_email(type_id: str, notification_email: str | None):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE notification_types SET notification_email = ? WHERE id = ?", (notification_email, type_id)
+    )
+    conn.commit()
+    conn.close()
+    return get_notification_type(type_id)
+
+
+def _create_notification(type_id: str, entity_id: str | None, message: str):
+    """Logs a real notification event to the יומן ביקורת, and — for types
+    whose channel includes email and that have a notification_email
+    configured — actually sends it via SMTP (see email_sender.py).
+    email_status records what really happened: 'sent', 'failed' (with
+    email_error set), or 'not_configured' (email channel wanted but no
+    address set, or no SMTP_* env vars configured)."""
+    conn = get_connection()
+    ntype = conn.execute("SELECT * FROM notification_types WHERE id = ?", (type_id,)).fetchone()
+    email_to = None
+    email_status = None
+    email_error = None
+    if ntype and "email" in (ntype["channels"] or "").split(","):
+        email_to = ntype["notification_email"]
+        if email_to:
+            sent, email_status, email_error = email_sender.send_email(
+                email_to, f"התראה: {ntype['name']}", message
+            )
+        else:
+            email_status = "not_configured"
+    conn.execute(
+        "INSERT INTO notifications "
+        "(notification_type_id, entity_id, message, created_at, email_sent_to, email_status, email_error) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            type_id, entity_id, message, datetime.now().isoformat(timespec="seconds"),
+            email_to, email_status, email_error,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _notification_already_logged_today(conn, type_id: str, entity_id: str):
+    today = date.today().isoformat()
+    row = conn.execute(
+        "SELECT 1 FROM notifications WHERE notification_type_id = ? AND entity_id = ? AND substr(created_at, 1, 10) = ?",
+        (type_id, entity_id, today),
+    ).fetchone()
+    return row is not None
+
+
+def refresh_expiry_notifications():
+    """Simulates the RATING_EXPIRING_30D/RATING_EXPIRED types' "יומי (06:00)"
+    schedule: there's no real cron here, so this scans for matches and logs
+    any that aren't already logged for today, called lazily whenever the
+    notification log is fetched."""
+    conn = get_connection()
+    rows = get_all_rankings()
+    for r in rows:
+        if r["status"] != "בתוקף" or not r["valid_until"]:
+            continue
+        valid_until = datetime.strptime(r["valid_until"], "%d/%m/%Y").date()
+        days_left = (valid_until - date.today()).days
+        if days_left < 0:
+            type_id = "RATING_EXPIRED"
+            msg = f"תוקף הדירוג של {r['subject']} ({r['code']}) פג ב-{r['valid_until']}"
+        elif days_left <= 30:
+            type_id = "RATING_EXPIRING_30D"
+            msg = f"תוקף הדירוג של {r['subject']} ({r['code']}) יפוג בעוד {days_left} ימים ({r['valid_until']})"
+        else:
+            continue
+        if not _notification_already_logged_today(conn, type_id, r["id"]):
+            conn.close()
+            _create_notification(type_id, r["id"], msg)
+            conn = get_connection()
+    conn.close()
+
+
+def get_all_notifications():
+    conn = get_connection()
+    rows = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM notifications ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+    ]
+    types_by_id = {t["id"]: t for t in conn.execute("SELECT * FROM notification_types").fetchall()}
+    conn.close()
+    for row in rows:
+        ntype = types_by_id.get(row["notification_type_id"])
+        row["type_name"] = ntype["name"] if ntype else row["notification_type_id"]
+        row["channels"] = [c for c in (ntype["channels"] or "").split(",") if c] if ntype else []
+    return rows
+
+
+def count_notifications():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]
+    conn.close()
+    return count

@@ -5,8 +5,19 @@ Ranking data is persisted in SQLite (see database.py) rather than kept
 in-memory, so it survives restarts and can be queried/updated like a real
 data store.
 """
+import csv
+import io
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Loaded before anything reads SMTP_* env vars — real credentials live in
+# backend/.env (gitignored), never in source control.
+load_dotenv(Path(__file__).parent / ".env")
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date
@@ -38,7 +49,9 @@ NAV_ITEMS = [
     {"id": "questionnaires", "label": "שאלונים"},
     {"id": "matrices", "label": "מטריצות"},
     {"id": "teams", "label": "צוותים"},
+    {"id": "roles", "label": "תפקידים"},
     {"id": "users", "label": "משתמשים"},
+    {"id": "reports", "label": "דוחות"},
     {"id": "audit-log", "label": "יומן ביקורת"},
 ]
 
@@ -140,7 +153,16 @@ class QuestionnaireDuplicateInput(BaseModel):
 
 class RoleInput(BaseModel):
     id: str
+    name: str
+    name_en: Optional[str] = None
     description: Optional[str] = None
+    can_view: bool = False
+    can_create: bool = False
+    can_edit: bool = False
+    can_delete: bool = False
+    can_approve: bool = False
+    can_committee_approve: bool = False
+    can_rerun: bool = False
 
 
 class UserInput(BaseModel):
@@ -170,6 +192,18 @@ class MatrixDuplicateInput(BaseModel):
     name: str
 
 
+class ReportInput(BaseModel):
+    id: str
+    title: str
+    purpose: Optional[str] = None
+    content: Optional[str] = None
+    export_formats: List[str] = ["PDF", "Excel"]
+
+
+class NotificationTypeEmailInput(BaseModel):
+    notification_email: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -187,10 +221,15 @@ NAV_COUNTS = {
     "models": database.count_models,
     "rating-scales": database.count_rating_scales,
     "questionnaires": database.count_questionnaires,
-    "approvals": lambda: database.count_rankings_by_status("ממתין לאישור"),
+    "approvals": lambda: (
+        database.count_processes_by_status("בתהליך") + database.count_processes_by_status("ממתין לוועדה")
+    ),
     "users": database.count_users,
     "matrices": database.count_matrices,
     "teams": database.count_teams,
+    "roles": database.count_roles,
+    "reports": database.count_reports,
+    "audit-log": database.count_notifications,
 }
 
 
@@ -221,14 +260,38 @@ def get_expiring_soon(expiring_within_days: int = Query(default=60, ge=0)):
     }
 
 
-@app.get("/api/approvals")
-def get_approvals():
-    """Rankings currently sitting in the ממתין לאישור status."""
-    rows = database.get_rankings_by_status("ממתין לאישור")
-    return {
-        "rows": rows,
-        "total": len(rows),
-    }
+@app.get("/api/approvals/manager")
+def get_manager_approvals():
+    """Processes awaiting review by a manager (stage 1 of the approvals queue)."""
+    rows = database.get_processes_by_status("בתהליך")
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.get("/api/approvals/committee")
+def get_committee_approvals():
+    """Processes awaiting review by the ועדה (stage 2 of the approvals queue)."""
+    rows = database.get_processes_by_status("ממתין לוועדה")
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.post("/api/approvals/{process_id}/approve-manager")
+def approve_manager(process_id: str):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "בתהליך":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור מנהל")
+    return database.update_process_status(process_id, "ממתין לוועדה", "amber")
+
+
+@app.post("/api/approvals/{process_id}/approve-committee")
+def approve_committee(process_id: str):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "ממתין לוועדה":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור ועדה")
+    return database.update_process_status(process_id, "אושר בוועדה", "green")
 
 
 @app.get("/api/report/rows/{process_id}")
@@ -660,14 +723,46 @@ def get_roles():
     return {"rows": rows, "total": len(rows)}
 
 
+def _clean_role_input(payload: RoleInput):
+    role_id = payload.id.strip()
+    name = payload.name.strip()
+    if not role_id or not name:
+        raise HTTPException(status_code=422, detail="קוד תפקיד ושם תפקיד הם שדות חובה")
+    return {
+        "id": role_id,
+        "name": name,
+        "name_en": (payload.name_en or "").strip() or None,
+        "description": (payload.description or "").strip() or None,
+        "can_view": payload.can_view,
+        "can_create": payload.can_create,
+        "can_edit": payload.can_edit,
+        "can_delete": payload.can_delete,
+        "can_approve": payload.can_approve,
+        "can_committee_approve": payload.can_committee_approve,
+        "can_rerun": payload.can_rerun,
+    }
+
+
 @app.post("/api/roles", status_code=201)
 def create_role(payload: RoleInput):
-    role_id = payload.id.strip()
-    if not role_id:
-        raise HTTPException(status_code=422, detail="קוד תפקיד הוא שדה חובה")
-    if database.role_code_taken(role_id):
+    cleaned = _clean_role_input(payload)
+    if database.role_code_taken(cleaned["id"]):
         raise HTTPException(status_code=409, detail="תפקיד עם קוד זה כבר קיים")
-    return database.create_role(role_id, (payload.description or "").strip() or None)
+    if database.role_name_taken(cleaned["name"]):
+        raise HTTPException(status_code=409, detail="תפקיד עם שם זה כבר קיים")
+    return database.create_role(**cleaned)
+
+
+@app.put("/api/roles/{role_id}")
+def update_role(role_id: str, payload: RoleInput):
+    if not database.get_role(role_id):
+        raise HTTPException(status_code=404, detail="תפקיד לא נמצא")
+    cleaned = _clean_role_input(payload)
+    if database.role_code_taken(cleaned["id"], exclude_id=role_id):
+        raise HTTPException(status_code=409, detail="תפקיד עם קוד זה כבר קיים")
+    if database.role_name_taken(cleaned["name"], exclude_id=role_id):
+        raise HTTPException(status_code=409, detail="תפקיד עם שם זה כבר קיים")
+    return database.update_role(role_id, **cleaned)
 
 
 @app.get("/api/users")
@@ -798,3 +893,189 @@ def duplicate_matrix(matrix_id: str, payload: MatrixDuplicateInput):
     if database.matrix_name_taken(new_name):
         raise HTTPException(status_code=409, detail="מטריצה עם שם זה כבר קיימת")
     return database.duplicate_matrix(matrix_id, new_id, new_name)
+
+
+@app.get("/api/reports")
+def get_reports():
+    rows = database.get_all_reports()
+    return {"rows": rows, "total": len(rows)}
+
+
+def _clean_report_input(payload: ReportInput):
+    report_id = payload.id.strip()
+    title = payload.title.strip()
+    if not report_id or not title:
+        raise HTTPException(status_code=422, detail="קוד דוח וכותרת הם שדות חובה")
+    return {
+        "id": report_id,
+        "title": title,
+        "purpose": (payload.purpose or "").strip() or None,
+        "content": (payload.content or "").strip() or None,
+        "export_formats": payload.export_formats,
+    }
+
+
+@app.post("/api/reports", status_code=201)
+def create_report(payload: ReportInput):
+    cleaned = _clean_report_input(payload)
+    if database.report_code_taken(cleaned["id"]):
+        raise HTTPException(status_code=409, detail="דוח עם קוד זה כבר קיים")
+    if database.report_title_taken(cleaned["title"]):
+        raise HTTPException(status_code=409, detail="דוח עם כותרת זו כבר קיים")
+    return database.create_report(**cleaned)
+
+
+@app.put("/api/reports/{report_id}")
+def update_report(report_id: str, payload: ReportInput):
+    if not database.get_report(report_id):
+        raise HTTPException(status_code=404, detail="דוח לא נמצא")
+    cleaned = _clean_report_input(payload)
+    if database.report_code_taken(cleaned["id"], exclude_id=report_id):
+        raise HTTPException(status_code=409, detail="דוח עם קוד זה כבר קיים")
+    if database.report_title_taken(cleaned["title"], exclude_id=report_id):
+        raise HTTPException(status_code=409, detail="דוח עם כותרת זו כבר קיים")
+    return database.update_report(report_id, **cleaned)
+
+
+RATING_SUMMARY_COLUMNS = [
+    {"key": "code", "label": "קוד"},
+    {"key": "subject", "label": "נושא"},
+    {"key": "model", "label": "מודל"},
+    {"key": "team", "label": "צוות"},
+    {"key": "status", "label": "סטטוס"},
+    {"key": "computed_rating", "label": "דירוג מחושב"},
+    {"key": "final_rating", "label": "דירוג סופי"},
+]
+
+RATING_EXPIRY_COLUMNS = [
+    {"key": "code", "label": "קוד"},
+    {"key": "subject", "label": "נושא"},
+    {"key": "model", "label": "מודל"},
+    {"key": "valid_until", "label": "תוקף עד"},
+    {"key": "days_left", "label": "ימים לפקיעה"},
+    {"key": "urgency", "label": "דחיפות"},
+]
+
+
+ENTITY_SELECT_REPORT_TYPES = ("rating_detail", "rating_comparison")
+
+
+@app.get("/api/reports/{report_id}/preview")
+def preview_report(
+    report_id: str,
+    kind: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
+    report = database.get_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="דוח לא נמצא")
+    if report["report_type"] in ENTITY_SELECT_REPORT_TYPES:
+        if not kind or not entity_id:
+            return {"type": "entity_select"}
+        if kind not in ("מנפיק", "נכס"):
+            raise HTTPException(status_code=422, detail="סוג ישות לא תקין")
+        detail = database.get_entity_rating_detail(kind, entity_id, date_from, date_to)
+        if not detail:
+            raise HTTPException(status_code=404, detail="הישות לא נמצאה")
+        preview_type = "entity_detail" if report["report_type"] == "rating_detail" else "entity_comparison"
+        return {"type": preview_type, **detail}
+    if report["report_type"] == "rating_summary":
+        return {"type": "table", "columns": RATING_SUMMARY_COLUMNS, "rows": database.get_rating_summary_rows()}
+    if report["report_type"] == "rating_expiry":
+        return {"type": "table", "columns": RATING_EXPIRY_COLUMNS, "rows": database.get_rating_expiry_rows()}
+    if report["report_type"] == "rating_distribution":
+        return {"type": "distribution", **database.get_rating_distribution()}
+    return {"type": "spec", "purpose": report["purpose"], "content": report["content"]}
+
+
+@app.get("/api/reports/{report_id}/export.csv")
+def export_report_csv(
+    report_id: str,
+    kind: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
+    report = database.get_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="דוח לא נמצא")
+
+    buffer = io.StringIO()
+    buffer.write("﻿")  # BOM so Excel opens the UTF-8 Hebrew text correctly
+    writer = csv.writer(buffer)
+
+    if report["report_type"] in ENTITY_SELECT_REPORT_TYPES:
+        if not kind or not entity_id:
+            raise HTTPException(status_code=422, detail="יש לבחור מנפיק או נכס")
+        detail = database.get_entity_rating_detail(kind, entity_id, date_from, date_to)
+        if not detail:
+            raise HTTPException(status_code=404, detail="הישות לא נמצאה")
+        writer.writerow(["סוג ישות", kind])
+        writer.writerow(["ישות", detail["entity"]["name"]])
+        writer.writerow([])
+        writer.writerow(
+            ["קוד", "נושא", "מודל", "צוות", "סטטוס", "ציון מחושב", "דירוג מחושב", "ציון סופי", "דירוג סופי", "תוקף מ-", "תוקף עד"]
+        )
+        for r in detail["rankings"]:
+            writer.writerow(
+                [
+                    r["code"], r["subject"], r["model"], r["team"], r["status"],
+                    r["computed_score"], r["computed_rating"], r["final_score"], r["final_rating"],
+                    r["valid_from"], r["valid_until"],
+                ]
+            )
+    elif report["report_type"] == "rating_summary":
+        writer.writerow([c["label"] for c in RATING_SUMMARY_COLUMNS])
+        for row in database.get_rating_summary_rows():
+            writer.writerow([row[c["key"]] for c in RATING_SUMMARY_COLUMNS])
+    elif report["report_type"] == "rating_expiry":
+        writer.writerow([c["label"] for c in RATING_EXPIRY_COLUMNS])
+        for row in database.get_rating_expiry_rows():
+            writer.writerow([row[c["key"]] for c in RATING_EXPIRY_COLUMNS])
+    elif report["report_type"] == "rating_distribution":
+        dist = database.get_rating_distribution()
+        writer.writerow(["דירוג", "כמות"])
+        for label, count in dist["by_rating"].items():
+            writer.writerow([label, count])
+        writer.writerow([])
+        writer.writerow(["מודל", "כמות"])
+        for label, count in dist["by_model"].items():
+            writer.writerow([label, count])
+    else:
+        writer.writerow(["שדה", "ערך"])
+        writer.writerow(["קוד דוח", report["id"]])
+        writer.writerow(["כותרת", report["title"]])
+        writer.writerow(["מטרה", report["purpose"] or ""])
+        writer.writerow(["תוכן", report["content"] or ""])
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{report_id}.csv"'},
+    )
+
+
+@app.get("/api/notification-types")
+def get_notification_types():
+    rows = database.get_all_notification_types()
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.put("/api/notification-types/{type_id}")
+def update_notification_type(type_id: str, payload: NotificationTypeEmailInput):
+    if not database.get_notification_type(type_id):
+        raise HTTPException(status_code=404, detail="סוג התראה לא נמצא")
+    email = (payload.notification_email or "").strip() or None
+    return database.update_notification_type_email(type_id, email)
+
+
+@app.get("/api/notifications")
+def get_notifications():
+    """The יומן ביקורת log. Refreshes the expiry-based notification types
+    first, since there's no real daily cron behind them (see
+    refresh_expiry_notifications)."""
+    database.refresh_expiry_notifications()
+    rows = database.get_all_notifications()
+    return {"rows": rows, "total": len(rows)}
