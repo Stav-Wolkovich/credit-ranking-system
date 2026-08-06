@@ -112,7 +112,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  getApprovals: () => request("/approvals"),
+  getManagerApprovals: () => request("/approvals/manager"),
+  getCommitteeApprovals: () => request("/approvals/committee"),
+  approveManagerProcess: (id) => request(`/approvals/${id}/approve-manager`, { method: "POST" }),
+  approveCommitteeProcess: (id) => request(`/approvals/${id}/approve-committee`, { method: "POST" }),
   getRoles: () => request("/roles"),
   createRole: (role) =>
     request("/roles", {
@@ -167,4 +170,11 @@ export const api = {
     const qs = new URLSearchParams(params).toString();
     return request(`/reports/${id}/preview${qs ? `?${qs}` : ""}`);
   },
+  getNotificationTypes: () => request("/notification-types"),
+  updateNotificationType: (id, payload) =>
+    request(`/notification-types/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  getNotifications: () => request("/notifications"),
 };

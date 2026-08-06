@@ -28,7 +28,14 @@ final_rating, computed_score, computed_rating, completion — same
 issuer-linked subject/framework as rankings, joined the same way by
 get_all_processes(). computed_* is the model's raw output; final_* is
 what was actually approved (a committee can approve a different rating
-than the one computed).
+than the one computed). ranking_processes doesn't store model_id/team_id
+itself; get_processes_by_status() joins those in from the matching
+rankings row via _attach_process_context() for display.
+
+The תור אישורים (approvals queue) page is a two-stage workflow over
+ranking_processes.status: "בתהליך" (awaiting manager review) →
+approve_manager moves it to "ממתין לוועדה" (awaiting committee review) →
+approve_committee moves it to "אושר בוועדה" (final).
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active.
@@ -107,11 +114,34 @@ it's None for user-created reports, which fall back to showing their
 own purpose/content as the "preview". get_rating_summary_rows(),
 get_rating_expiry_rows(), and get_rating_distribution() compute that
 live data from the real rankings table.
+
+Notification types columns are the fields the יומן ביקורת page's
+"סוגי התראות" tab displays: id, name (תיאור), trigger_description
+(טריגר), recipient_role (נמען — descriptive, not a users.id link),
+channels (comma-separated: email/internal), timing, and
+notification_email — the one field the page lets you edit, i.e. the
+address that type's notifications get mailed to. Real SMTP delivery is
+wired up via email_sender.py, configured through SMTP_* environment
+variables (see backend/.env.example) — with no .env present, sending
+degrades to a logged "not_configured" status rather than failing the
+action that triggered the notification. notifications is the log
+itself (notification_type_id, entity_id, message, created_at,
+email_sent_to, email_status: sent/failed/not_configured/None,
+email_error). Only four types are wired to real triggers: model
+updates (MODEL_CHANGED), a process reaching ממתין לוועדה
+(RATING_PENDING_COMMITTEE), and rating expiry, checked lazily on each
+notifications fetch rather than by a real daily cron
+(RATING_EXPIRING_30D/RATING_EXPIRED via refresh_expiry_notifications()).
+The remaining types (submission/return flows, backups, stuck-process
+tracking, unauthorized access) have no underlying data source in the
+app yet and are catalog-only.
 """
 import re
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
+
+from . import email_sender
 
 DB_PATH = Path(__file__).parent / "rankings.db"
 
@@ -367,6 +397,97 @@ SEED_REPORT_ROWS = [
         "content": "גרף עוגה - התפלגות לפי דירוג (AAA-D). גרף עמודות - כמות לפי מודל. קו מגמה - שינויים לאורך זמן. מפת חום - דירוגים לפי מודל × דירוג.",
         "export_formats": "PDF,Excel,הדפסה",
         "report_type": "rating_distribution",
+    },
+]
+
+# id, name (תיאור), trigger_description (טריגר), recipient_role (נמען),
+# channels (ערוץ, comma-separated: email/internal), timing (תזמון).
+# is_live marks the types this session actually wires up to a real event —
+# the rest (submission/return flows, backups, stuck-process tracking, auth)
+# have no underlying data source in the app yet, so they stay defined here
+# (configurable, visible in the catalog) without ever generating a real
+# log entry, rather than faking history for events that never happened.
+SEED_NOTIFICATION_TYPE_ROWS = [
+    {
+        "id": "RATING_EXPIRING_30D",
+        "name": "תוקף דירוג עומד לפוג",
+        "trigger_description": "30 יום לפני שתוקף הדירוג עומד לפוג",
+        "recipient_role": "אנליסט",
+        "channels": "email,internal",
+        "timing": "יומי (06:00)",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_EXPIRED",
+        "name": "תוקף דירוג פג",
+        "trigger_description": "תאריך התפוגה עבר",
+        "recipient_role": "אנליסט + מנהל",
+        "channels": "email,internal",
+        "timing": "יומי (06:00)",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_SUBMITTED",
+        "name": "דירוג חדש נשלח לאישור",
+        "trigger_description": "אנליסט שלח דירוג לאישור",
+        "recipient_role": "מאשר",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_RETURNED",
+        "name": "דירוג הוחזר עם הערות",
+        "trigger_description": "מאשר החזיר דירוג עם הערות",
+        "recipient_role": "אנליסט",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "RATING_PENDING_COMMITTEE",
+        "name": "דירוג ממתין לוועדה",
+        "trigger_description": "מאשר אישר ונדרש אישור ועדה",
+        "recipient_role": "חברי ועדה",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "MODEL_CHANGED",
+        "name": "שינוי במודל",
+        "trigger_description": "מנהל דירוג שינה מטא-דאטה של מודל",
+        "recipient_role": "מנהל דירוג",
+        "channels": "internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "BACKUP_FAILED",
+        "name": "גיבוי כשל",
+        "trigger_description": "גיבוי אוטומטי של המערכת נכשל",
+        "recipient_role": "מנהל מערכת",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
+        "id": "PROCESS_STUCK",
+        "name": "תהליך תקוע",
+        "trigger_description": "תהליך בסטטוס בעבודה מעל 14 יום",
+        "recipient_role": "אנליסט + מנהל",
+        "channels": "email,internal",
+        "timing": "יומי",
+        "notification_email": None,
+    },
+    {
+        "id": "UNAUTHORIZED_ACCESS",
+        "name": "ניסיון גישה לא מורשה",
+        "trigger_description": "משתמש ניסה לגשת למערכת ללא הרשאה",
+        "recipient_role": "מנהל מערכת",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
     },
 ]
 
@@ -1056,6 +1177,50 @@ def init_db():
         )
         conn.commit()
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_types (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            trigger_description TEXT,
+            recipient_role TEXT,
+            channels TEXT NOT NULL DEFAULT 'internal',
+            timing TEXT,
+            notification_email TEXT
+        )
+        """
+    )
+    notification_type_count = conn.execute("SELECT COUNT(*) FROM notification_types").fetchone()[0]
+    if notification_type_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO notification_types
+                (id, name, trigger_description, recipient_role, channels, timing, notification_email)
+            VALUES (:id, :name, :trigger_description, :recipient_role, :channels, :timing, :notification_email)
+            """,
+            SEED_NOTIFICATION_TYPE_ROWS,
+        )
+        conn.commit()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notification_type_id TEXT NOT NULL REFERENCES notification_types(id),
+            entity_id TEXT,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            email_sent_to TEXT,
+            email_status TEXT,
+            email_error TEXT
+        )
+        """
+    )
+    notification_columns = {row["name"] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+    for col in ("email_status", "email_error"):
+        if col not in notification_columns:
+            conn.execute(f"ALTER TABLE notifications ADD COLUMN {col} TEXT")
+
     conn.commit()
     conn.close()
 
@@ -1274,6 +1439,65 @@ def get_process(process_id: str):
     process = dict(row)
     _attach_issuer_display_names(conn, [process])
     conn.close()
+    return process
+
+
+def _attach_process_context(conn, processes):
+    """ranking_processes doesn't store model_id/team_id itself — the
+    matching rankings row (same id) does, since they're two views of the
+    same תהליך. Pull in display names for the approvals queue."""
+    context_by_id = {
+        row["id"]: row for row in conn.execute("SELECT id, model_id, team_id FROM rankings").fetchall()
+    }
+    models_by_id = {
+        row["id"]: f"{row['name']} {row['active_version']}"
+        for row in conn.execute("SELECT id, name, active_version FROM models").fetchall()
+    }
+    teams_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM teams").fetchall()}
+    for p in processes:
+        ctx = context_by_id.get(p["id"])
+        p["model"] = models_by_id.get(ctx["model_id"]) if ctx else None
+        p["team"] = teams_by_id.get(ctx["team_id"]) if ctx else None
+    return processes
+
+
+def get_processes_by_status(status: str):
+    """Real data backing the תור אישורים queue's two tabs."""
+    conn = get_connection()
+    rows = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM ranking_processes WHERE status = ? ORDER BY id DESC", (status,)
+        ).fetchall()
+    ]
+    _attach_issuer_display_names(conn, rows)
+    _attach_process_context(conn, rows)
+    conn.close()
+    return rows
+
+
+def count_processes_by_status(status: str):
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM ranking_processes WHERE status = ?", (status,)).fetchone()[0]
+    conn.close()
+    return count
+
+
+def update_process_status(process_id: str, status: str, tone: str):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET status = ?, tone = ? WHERE id = ?",
+        (status, tone, process_id),
+    )
+    conn.commit()
+    conn.close()
+    process = get_process(process_id)
+    if status == "ממתין לוועדה":
+        _create_notification(
+            "RATING_PENDING_COMMITTEE",
+            process_id,
+            f"התהליך {process_id} ({process['code']}) אושר על ידי מנהל וממתין כעת לאישור ועדה",
+        )
     return process
 
 
@@ -1710,6 +1934,7 @@ def update_model(
         _replace_model_questionnaires(conn, id, questionnaires)
     conn.commit()
     conn.close()
+    _create_notification("MODEL_CHANGED", id, f"מודל \"{name}\" ({id}) עודכן")
     return get_model(id)
 
 
@@ -2709,3 +2934,126 @@ def get_entity_rating_detail(
     conn.close()
     rankings.sort(key=lambda r: (r["approval_date"] or "", r["id"]))
     return {"entity_kind": kind, "entity": entity, "rankings": rankings}
+
+
+def get_all_notification_types():
+    conn = get_connection()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM notification_types ORDER BY rowid ASC").fetchall()]
+    conn.close()
+    for row in rows:
+        row["channels"] = [c for c in (row["channels"] or "").split(",") if c]
+    return rows
+
+
+def get_notification_type(type_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM notification_types WHERE id = ?", (type_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    t = dict(row)
+    t["channels"] = [c for c in (t["channels"] or "").split(",") if c]
+    return t
+
+
+def update_notification_type_email(type_id: str, notification_email: str | None):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE notification_types SET notification_email = ? WHERE id = ?", (notification_email, type_id)
+    )
+    conn.commit()
+    conn.close()
+    return get_notification_type(type_id)
+
+
+def _create_notification(type_id: str, entity_id: str | None, message: str):
+    """Logs a real notification event to the יומן ביקורת, and — for types
+    whose channel includes email and that have a notification_email
+    configured — actually sends it via SMTP (see email_sender.py).
+    email_status records what really happened: 'sent', 'failed' (with
+    email_error set), or 'not_configured' (email channel wanted but no
+    address set, or no SMTP_* env vars configured)."""
+    conn = get_connection()
+    ntype = conn.execute("SELECT * FROM notification_types WHERE id = ?", (type_id,)).fetchone()
+    email_to = None
+    email_status = None
+    email_error = None
+    if ntype and "email" in (ntype["channels"] or "").split(","):
+        email_to = ntype["notification_email"]
+        if email_to:
+            sent, email_status, email_error = email_sender.send_email(
+                email_to, f"התראה: {ntype['name']}", message
+            )
+        else:
+            email_status = "not_configured"
+    conn.execute(
+        "INSERT INTO notifications "
+        "(notification_type_id, entity_id, message, created_at, email_sent_to, email_status, email_error) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            type_id, entity_id, message, datetime.now().isoformat(timespec="seconds"),
+            email_to, email_status, email_error,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _notification_already_logged_today(conn, type_id: str, entity_id: str):
+    today = date.today().isoformat()
+    row = conn.execute(
+        "SELECT 1 FROM notifications WHERE notification_type_id = ? AND entity_id = ? AND substr(created_at, 1, 10) = ?",
+        (type_id, entity_id, today),
+    ).fetchone()
+    return row is not None
+
+
+def refresh_expiry_notifications():
+    """Simulates the RATING_EXPIRING_30D/RATING_EXPIRED types' "יומי (06:00)"
+    schedule: there's no real cron here, so this scans for matches and logs
+    any that aren't already logged for today, called lazily whenever the
+    notification log is fetched."""
+    conn = get_connection()
+    rows = get_all_rankings()
+    for r in rows:
+        if r["status"] != "בתוקף" or not r["valid_until"]:
+            continue
+        valid_until = datetime.strptime(r["valid_until"], "%d/%m/%Y").date()
+        days_left = (valid_until - date.today()).days
+        if days_left < 0:
+            type_id = "RATING_EXPIRED"
+            msg = f"תוקף הדירוג של {r['subject']} ({r['code']}) פג ב-{r['valid_until']}"
+        elif days_left <= 30:
+            type_id = "RATING_EXPIRING_30D"
+            msg = f"תוקף הדירוג של {r['subject']} ({r['code']}) יפוג בעוד {days_left} ימים ({r['valid_until']})"
+        else:
+            continue
+        if not _notification_already_logged_today(conn, type_id, r["id"]):
+            conn.close()
+            _create_notification(type_id, r["id"], msg)
+            conn = get_connection()
+    conn.close()
+
+
+def get_all_notifications():
+    conn = get_connection()
+    rows = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM notifications ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+    ]
+    types_by_id = {t["id"]: t for t in conn.execute("SELECT * FROM notification_types").fetchall()}
+    conn.close()
+    for row in rows:
+        ntype = types_by_id.get(row["notification_type_id"])
+        row["type_name"] = ntype["name"] if ntype else row["notification_type_id"]
+        row["channels"] = [c for c in (ntype["channels"] or "").split(",") if c] if ntype else []
+    return rows
+
+
+def count_notifications():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]
+    conn.close()
+    return count

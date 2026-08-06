@@ -7,6 +7,13 @@ data store.
 """
 import csv
 import io
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Loaded before anything reads SMTP_* env vars — real credentials live in
+# backend/.env (gitignored), never in source control.
+load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -193,6 +200,10 @@ class ReportInput(BaseModel):
     export_formats: List[str] = ["PDF", "Excel"]
 
 
+class NotificationTypeEmailInput(BaseModel):
+    notification_email: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -210,12 +221,15 @@ NAV_COUNTS = {
     "models": database.count_models,
     "rating-scales": database.count_rating_scales,
     "questionnaires": database.count_questionnaires,
-    "approvals": lambda: database.count_rankings_by_status("ממתין לאישור"),
+    "approvals": lambda: (
+        database.count_processes_by_status("בתהליך") + database.count_processes_by_status("ממתין לוועדה")
+    ),
     "users": database.count_users,
     "matrices": database.count_matrices,
     "teams": database.count_teams,
     "roles": database.count_roles,
     "reports": database.count_reports,
+    "audit-log": database.count_notifications,
 }
 
 
@@ -246,14 +260,38 @@ def get_expiring_soon(expiring_within_days: int = Query(default=60, ge=0)):
     }
 
 
-@app.get("/api/approvals")
-def get_approvals():
-    """Rankings currently sitting in the ממתין לאישור status."""
-    rows = database.get_rankings_by_status("ממתין לאישור")
-    return {
-        "rows": rows,
-        "total": len(rows),
-    }
+@app.get("/api/approvals/manager")
+def get_manager_approvals():
+    """Processes awaiting review by a manager (stage 1 of the approvals queue)."""
+    rows = database.get_processes_by_status("בתהליך")
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.get("/api/approvals/committee")
+def get_committee_approvals():
+    """Processes awaiting review by the ועדה (stage 2 of the approvals queue)."""
+    rows = database.get_processes_by_status("ממתין לוועדה")
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.post("/api/approvals/{process_id}/approve-manager")
+def approve_manager(process_id: str):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "בתהליך":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור מנהל")
+    return database.update_process_status(process_id, "ממתין לוועדה", "amber")
+
+
+@app.post("/api/approvals/{process_id}/approve-committee")
+def approve_committee(process_id: str):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "ממתין לוועדה":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור ועדה")
+    return database.update_process_status(process_id, "אושר בוועדה", "green")
 
 
 @app.get("/api/report/rows/{process_id}")
@@ -1017,3 +1055,27 @@ def export_report_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{report_id}.csv"'},
     )
+
+
+@app.get("/api/notification-types")
+def get_notification_types():
+    rows = database.get_all_notification_types()
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.put("/api/notification-types/{type_id}")
+def update_notification_type(type_id: str, payload: NotificationTypeEmailInput):
+    if not database.get_notification_type(type_id):
+        raise HTTPException(status_code=404, detail="סוג התראה לא נמצא")
+    email = (payload.notification_email or "").strip() or None
+    return database.update_notification_type_email(type_id, email)
+
+
+@app.get("/api/notifications")
+def get_notifications():
+    """The יומן ביקורת log. Refreshes the expiry-based notification types
+    first, since there's no real daily cron behind them (see
+    refresh_expiry_notifications)."""
+    database.refresh_expiry_notifications()
+    rows = database.get_all_notifications()
+    return {"rows": rows, "total": len(rows)}
