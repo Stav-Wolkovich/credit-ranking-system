@@ -15,6 +15,8 @@ const PERMISSION_COLUMNS = [
 
 const COLUMNS = ["תפקיד", "קבוצת AD", "תיאור תפקיד", ...PERMISSION_COLUMNS.map((p) => p.label), "פעולות"];
 
+const COLUMN_WIDTHS = [170, 150, 300, ...PERMISSION_COLUMNS.map(() => 90), 70];
+
 function PermissionMark({ granted }) {
   return (
     <span style={{ color: granted ? "#1e7e3c" : "var(--text-light)", fontWeight: granted ? 700 : 400 }}>
@@ -70,11 +72,16 @@ export default function RolesPage() {
       {error && <ErrorBanner message={error} />}
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
-        <table>
+        <table style={{ tableLayout: "fixed", width: "100%", minWidth: 1100 }}>
+          <colgroup>
+            {COLUMN_WIDTHS.map((w, i) => (
+              <col key={i} style={{ width: w }} />
+            ))}
+          </colgroup>
           <thead>
             <tr style={{ background: "var(--navy)" }}>
               {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px", whiteSpace: "nowrap" }}>
+                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {c}
                 </th>
               ))}
@@ -97,12 +104,12 @@ export default function RolesPage() {
             )}
             {rows.map((r) => (
               <tr key={r.id} style={{ borderTop: "1px solid var(--border)" }}>
-                <td style={{ padding: "12px 16px" }}>
+                <td style={{ padding: "12px 16px", overflowWrap: "break-word" }}>
                   <div style={{ fontWeight: 600 }}>{r.name}</div>
                   {r.name_en && <div style={{ fontSize: 11.5, color: "var(--text-light)" }}>({r.name_en})</div>}
                 </td>
-                <td style={{ padding: "12px 16px", color: "var(--text-mid)" }}>{r.id}</td>
-                <td style={{ padding: "12px 16px", color: "var(--text-mid)", maxWidth: 320 }}>{r.description ?? "-"}</td>
+                <td style={{ padding: "12px 16px", color: "var(--text-mid)", overflowWrap: "break-word" }}>{r.id}</td>
+                <td style={{ padding: "12px 16px", color: "var(--text-mid)", overflowWrap: "break-word", whiteSpace: "normal" }}>{r.description ?? "-"}</td>
                 {PERMISSION_COLUMNS.map((p) => (
                   <td key={p.key} style={{ padding: "12px 16px", textAlign: "center" }}>
                     <PermissionMark granted={r[p.key]} />
