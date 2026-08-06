@@ -119,6 +119,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(role),
     }),
+  updateRole: (id, role) =>
+    request(`/roles/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(role),
+    }),
   getUsers: () => request("/users"),
   createUser: (user) =>
     request("/users", {

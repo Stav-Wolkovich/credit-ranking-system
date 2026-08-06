@@ -38,6 +38,7 @@ NAV_ITEMS = [
     {"id": "questionnaires", "label": "שאלונים"},
     {"id": "matrices", "label": "מטריצות"},
     {"id": "teams", "label": "צוותים"},
+    {"id": "roles", "label": "תפקידים"},
     {"id": "users", "label": "משתמשים"},
     {"id": "audit-log", "label": "יומן ביקורת"},
 ]
@@ -140,7 +141,16 @@ class QuestionnaireDuplicateInput(BaseModel):
 
 class RoleInput(BaseModel):
     id: str
+    name: str
+    name_en: Optional[str] = None
     description: Optional[str] = None
+    can_view: bool = False
+    can_create: bool = False
+    can_edit: bool = False
+    can_delete: bool = False
+    can_approve: bool = False
+    can_committee_approve: bool = False
+    can_rerun: bool = False
 
 
 class UserInput(BaseModel):
@@ -191,6 +201,7 @@ NAV_COUNTS = {
     "users": database.count_users,
     "matrices": database.count_matrices,
     "teams": database.count_teams,
+    "roles": database.count_roles,
 }
 
 
@@ -660,14 +671,46 @@ def get_roles():
     return {"rows": rows, "total": len(rows)}
 
 
+def _clean_role_input(payload: RoleInput):
+    role_id = payload.id.strip()
+    name = payload.name.strip()
+    if not role_id or not name:
+        raise HTTPException(status_code=422, detail="קוד תפקיד ושם תפקיד הם שדות חובה")
+    return {
+        "id": role_id,
+        "name": name,
+        "name_en": (payload.name_en or "").strip() or None,
+        "description": (payload.description or "").strip() or None,
+        "can_view": payload.can_view,
+        "can_create": payload.can_create,
+        "can_edit": payload.can_edit,
+        "can_delete": payload.can_delete,
+        "can_approve": payload.can_approve,
+        "can_committee_approve": payload.can_committee_approve,
+        "can_rerun": payload.can_rerun,
+    }
+
+
 @app.post("/api/roles", status_code=201)
 def create_role(payload: RoleInput):
-    role_id = payload.id.strip()
-    if not role_id:
-        raise HTTPException(status_code=422, detail="קוד תפקיד הוא שדה חובה")
-    if database.role_code_taken(role_id):
+    cleaned = _clean_role_input(payload)
+    if database.role_code_taken(cleaned["id"]):
         raise HTTPException(status_code=409, detail="תפקיד עם קוד זה כבר קיים")
-    return database.create_role(role_id, (payload.description or "").strip() or None)
+    if database.role_name_taken(cleaned["name"]):
+        raise HTTPException(status_code=409, detail="תפקיד עם שם זה כבר קיים")
+    return database.create_role(**cleaned)
+
+
+@app.put("/api/roles/{role_id}")
+def update_role(role_id: str, payload: RoleInput):
+    if not database.get_role(role_id):
+        raise HTTPException(status_code=404, detail="תפקיד לא נמצא")
+    cleaned = _clean_role_input(payload)
+    if database.role_code_taken(cleaned["id"], exclude_id=role_id):
+        raise HTTPException(status_code=409, detail="תפקיד עם קוד זה כבר קיים")
+    if database.role_name_taken(cleaned["name"], exclude_id=role_id):
+        raise HTTPException(status_code=409, detail="תפקיד עם שם זה כבר קיים")
+    return database.update_role(role_id, **cleaned)
 
 
 @app.get("/api/users")

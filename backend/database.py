@@ -76,8 +76,13 @@ parameter_answers holds the ranked answer options for a parameter
 
 Users columns are the fields the users page displays: id (username),
 full_name, email, active. user_roles links a user to the roles
-assigned to them (user_id, role_id). Roles columns are: id (code,
-e.g. RISK_MODEL_BUILDER), description.
+assigned to them (user_id, role_id).
+
+Roles columns are the fields the roles permission-matrix page displays:
+id (AD group code, e.g. RATING_ADMIN), name (Hebrew display name),
+name_en, description, and seven boolean permission flags (can_view,
+can_create, can_edit, can_delete, can_approve, can_committee_approve,
+can_rerun) rendered as the matrix's checkmark columns.
 
 Matrices columns are the fields the matrices page displays: id (matrix
 code), name, type (e.g. רשת 2D), model_id (the model the matrix belongs
@@ -213,10 +218,64 @@ SEED_ANSWER_TEXTS = [
 ]
 
 SEED_ROLE_ROWS = [
-    {"id": "RISK_MODEL_BUILDER", "description": None},
-    {"id": "META_DATA_ADMIN", "description": None},
-    {"id": "RATING_ANALYST", "description": None},
+    {
+        "id": "AD_RATING_ANALYST",
+        "name": "אנליסט דירוג",
+        "name_en": "Rating Analyst",
+        "description": "פתיחת תהליכי דירוג, מילוי שאלונים, הזנת נתונים כמותיים, שליחה לאישור",
+        "can_view": True, "can_create": True, "can_edit": True, "can_delete": False,
+        "can_approve": False, "can_committee_approve": False, "can_rerun": False,
+    },
+    {
+        "id": "RATING_APPROVER",
+        "name": "מאשר דירוג",
+        "name_en": "Rating Approver",
+        "description": "בדיקת דירוגים, אישור או החזרה עם הערות. הפרדת סמכויות - לא יכול לאשר דירוג שהוא עצמו יצר",
+        "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
+        "can_approve": True, "can_committee_approve": False, "can_rerun": False,
+    },
+    {
+        "id": "RATING_COMMITTEE",
+        "name": "חבר ועדת דירוג",
+        "name_en": "Rating Committee",
+        "description": "אישור סופי של דירוגים הדורשים אישור ועדה",
+        "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
+        "can_approve": False, "can_committee_approve": True, "can_rerun": False,
+    },
+    {
+        "id": "RATING_ADMIN",
+        "name": "מנהל דירוג",
+        "name_en": "Rating Admin",
+        "description": "ניהול כל המטא-דאטה: מודלים, שאלונים, פרמטרים, תשובות, נוסחאות, מטריצות, טבלאות המרה",
+        "can_view": True, "can_create": True, "can_edit": True, "can_delete": True,
+        "can_approve": False, "can_committee_approve": False, "can_rerun": True,
+    },
+    {
+        "id": "RATING_VIEWER",
+        "name": "צופה",
+        "name_en": "Viewer",
+        "description": "צפייה בלבד בדירוגים, דוחות ולוח בקרה",
+        "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
+        "can_approve": False, "can_committee_approve": False, "can_rerun": False,
+    },
+    {
+        "id": "RATING_SYSADMIN",
+        "name": "מנהל מערכת",
+        "name_en": "System Admin",
+        "description": "ניהול טכני - ג'ובים, אודיט, הרשאות, הגדרות מערכת",
+        "can_view": True, "can_create": True, "can_edit": True, "can_delete": True,
+        "can_approve": False, "can_committee_approve": False, "can_rerun": True,
+    },
 ]
+
+# One-time migration: earlier seed data used these 3 placeholder role
+# codes before the real default roles (above) were defined. Any user
+# still linked to one of these gets remapped to its closest replacement.
+LEGACY_ROLE_REMAP = {
+    "RISK_MODEL_BUILDER": "RATING_ADMIN",
+    "META_DATA_ADMIN": "RATING_ADMIN",
+    "RATING_ANALYST": "AD_RATING_ANALYST",
+}
 
 # There's no login/session system yet, so newly created or duplicated
 # questionnaires are attributed to this fixed user id (joined to their
@@ -758,16 +817,67 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS roles (
             id TEXT PRIMARY KEY,
-            description TEXT
+            name TEXT,
+            name_en TEXT,
+            description TEXT,
+            can_view INTEGER NOT NULL DEFAULT 0,
+            can_create INTEGER NOT NULL DEFAULT 0,
+            can_edit INTEGER NOT NULL DEFAULT 0,
+            can_delete INTEGER NOT NULL DEFAULT 0,
+            can_approve INTEGER NOT NULL DEFAULT 0,
+            can_committee_approve INTEGER NOT NULL DEFAULT 0,
+            can_rerun INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    role_columns = {row["name"] for row in conn.execute("PRAGMA table_info(roles)").fetchall()}
+    for col, ddl in [
+        ("name", "TEXT"),
+        ("name_en", "TEXT"),
+        ("can_view", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_create", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_edit", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_delete", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_approve", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_committee_approve", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_rerun", "INTEGER NOT NULL DEFAULT 0"),
+    ]:
+        if col not in role_columns:
+            conn.execute(f"ALTER TABLE roles ADD COLUMN {col} {ddl}")
+
     role_count = conn.execute("SELECT COUNT(*) FROM roles").fetchone()[0]
     if role_count == 0:
         conn.executemany(
-            "INSERT INTO roles (id, description) VALUES (:id, :description)", SEED_ROLE_ROWS
+            """
+            INSERT INTO roles (id, name, name_en, description, can_view, can_create, can_edit,
+                                can_delete, can_approve, can_committee_approve, can_rerun)
+            VALUES (:id, :name, :name_en, :description, :can_view, :can_create, :can_edit,
+                    :can_delete, :can_approve, :can_committee_approve, :can_rerun)
+            """,
+            SEED_ROLE_ROWS,
         )
         conn.commit()
+    else:
+        existing_role_ids = {row["id"] for row in conn.execute("SELECT id FROM roles").fetchall()}
+        new_role_ids = {r["id"] for r in SEED_ROLE_ROWS}
+        if not (new_role_ids & existing_role_ids):
+            for old_id, new_id in LEGACY_ROLE_REMAP.items():
+                conn.execute("UPDATE OR IGNORE user_roles SET role_id = ? WHERE role_id = ?", (new_id, old_id))
+                conn.execute("DELETE FROM user_roles WHERE role_id = ?", (old_id,))
+            conn.execute(
+                "DELETE FROM roles WHERE id IN ({})".format(",".join("?" * len(LEGACY_ROLE_REMAP))),
+                list(LEGACY_ROLE_REMAP.keys()),
+            )
+            conn.executemany(
+                """
+                INSERT INTO roles (id, name, name_en, description, can_view, can_create, can_edit,
+                                    can_delete, can_approve, can_committee_approve, can_rerun)
+                VALUES (:id, :name, :name_en, :description, :can_view, :can_create, :can_edit,
+                        :can_delete, :can_approve, :can_committee_approve, :can_rerun)
+                """,
+                SEED_ROLE_ROWS,
+            )
+            conn.commit()
 
     conn.execute(
         """
@@ -1847,18 +1957,30 @@ def duplicate_questionnaire(source_id: str, new_id: str, new_name: str, created_
     conn.close()
 
 
+ROLE_PERMISSION_FIELDS = [
+    "can_view", "can_create", "can_edit", "can_delete",
+    "can_approve", "can_committee_approve", "can_rerun",
+]
+
+
+def _cast_role_permissions(role):
+    for field in ROLE_PERMISSION_FIELDS:
+        role[field] = bool(role[field])
+    return role
+
+
 def get_all_roles():
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM roles ORDER BY rowid ASC").fetchall()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM roles ORDER BY rowid ASC").fetchall()]
     conn.close()
-    return [dict(row) for row in rows]
+    return [_cast_role_permissions(r) for r in rows]
 
 
 def get_role(role_id: str):
     conn = get_connection()
     row = conn.execute("SELECT * FROM roles WHERE id = ?", (role_id,)).fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _cast_role_permissions(dict(row)) if row else None
 
 
 def count_roles():
@@ -1868,16 +1990,87 @@ def count_roles():
     return count
 
 
-def role_code_taken(code: str):
+def role_code_taken(code: str, exclude_id: str | None = None):
     conn = get_connection()
-    row = conn.execute("SELECT 1 FROM roles WHERE id = ?", (code,)).fetchone()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM roles WHERE id = ? AND id != ?", (code, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM roles WHERE id = ?", (code,)).fetchone()
     conn.close()
     return row is not None
 
 
-def create_role(id: str, description: str | None):
+def role_name_taken(name: str, exclude_id: str | None = None):
     conn = get_connection()
-    conn.execute("INSERT INTO roles (id, description) VALUES (?, ?)", (id, description))
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM roles WHERE name = ? AND id != ?", (name, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM roles WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_role(
+    id: str,
+    name: str,
+    name_en: str | None,
+    description: str | None,
+    can_view: bool,
+    can_create: bool,
+    can_edit: bool,
+    can_delete: bool,
+    can_approve: bool,
+    can_committee_approve: bool,
+    can_rerun: bool,
+):
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO roles (id, name, name_en, description, can_view, can_create, can_edit,
+                            can_delete, can_approve, can_committee_approve, can_rerun)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            id, name, name_en, description,
+            int(can_view), int(can_create), int(can_edit), int(can_delete),
+            int(can_approve), int(can_committee_approve), int(can_rerun),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return get_role(id)
+
+
+def update_role(
+    original_id: str,
+    id: str,
+    name: str,
+    name_en: str | None,
+    description: str | None,
+    can_view: bool,
+    can_create: bool,
+    can_edit: bool,
+    can_delete: bool,
+    can_approve: bool,
+    can_committee_approve: bool,
+    can_rerun: bool,
+):
+    conn = get_connection()
+    conn.execute(
+        """
+        UPDATE roles SET id = ?, name = ?, name_en = ?, description = ?, can_view = ?, can_create = ?,
+            can_edit = ?, can_delete = ?, can_approve = ?, can_committee_approve = ?, can_rerun = ?
+        WHERE id = ?
+        """,
+        (
+            id, name, name_en, description,
+            int(can_view), int(can_create), int(can_edit), int(can_delete),
+            int(can_approve), int(can_committee_approve), int(can_rerun),
+            original_id,
+        ),
+    )
+    if original_id != id:
+        conn.execute("UPDATE user_roles SET role_id = ? WHERE role_id = ?", (id, original_id))
     conn.commit()
     conn.close()
     return get_role(id)
