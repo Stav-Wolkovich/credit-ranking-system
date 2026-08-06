@@ -1,15 +1,23 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
 import TeamModal from "../components/TeamModal.jsx";
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
-const COLUMNS = ["קוד צוות", "שם צוות", "סוג", "סוג תהליך", "פעיל", "פעולות"];
+const COLUMNS = [
+  { key: "id", label: "קוד צוות", accessor: (r) => r.id },
+  { key: "name", label: "שם צוות", accessor: (r) => r.name },
+  { key: "type", label: "סוג", accessor: (r) => r.type },
+  { key: "process_kind", label: "סוג תהליך", accessor: (r) => r.process_kind },
+  { key: "active", label: "פעיל", accessor: (r) => (r.active ? "פעיל" : "לא פעיל") },
+  { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
+];
 
 export default function TeamsPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
 
   const loadTeams = useCallback(() => {
@@ -26,12 +34,8 @@ export default function TeamsPage() {
   }, [loadTeams]);
 
   const rows = data?.rows ?? [];
-
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q));
-  }, [rows, search]);
+  const filterState = useColumnFilters(rows, COLUMNS);
+  const { search, setSearch, filteredRows } = filterState;
 
   return (
     <div>
@@ -84,15 +88,7 @@ export default function TeamsPage() {
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
         <table>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead columns={COLUMNS} filterState={filterState} />
           <tbody>
             {loading && (
               <tr>

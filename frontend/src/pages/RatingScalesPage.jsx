@@ -1,15 +1,22 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { PageHeader, ErrorBanner, ConfirmDialog } from "../components/ui.jsx";
 import RatingScaleModal from "../components/RatingScaleModal.jsx";
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
-const COLUMNS = ["קוד סולם", "שם סולם", "תיאור", "מספר דירוגים", "פעולות"];
+const COLUMNS = [
+  { key: "id", label: "קוד סולם", accessor: (r) => r.id },
+  { key: "name", label: "שם סולם", accessor: (r) => r.name },
+  { key: "description", label: "תיאור", accessor: (r) => r.description },
+  { key: "levels_count", label: "מספר דירוגים", accessor: (r) => r.levels_count },
+  { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
+];
 
 export default function RatingScalesPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
@@ -27,12 +34,8 @@ export default function RatingScalesPage() {
   }, [loadRatingScales]);
 
   const rows = data?.rows ?? [];
-
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q));
-  }, [rows, search]);
+  const filterState = useColumnFilters(rows, COLUMNS);
+  const { search, setSearch, filteredRows } = filterState;
 
   function confirmDelete() {
     const scale = deleteTarget;
@@ -85,15 +88,7 @@ export default function RatingScalesPage() {
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
         <table>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead columns={COLUMNS} filterState={filterState} />
           <tbody>
             {loading && (
               <tr>

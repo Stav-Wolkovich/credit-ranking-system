@@ -1,25 +1,24 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner, ConfirmDialog } from "../components/ui.jsx";
 import ModelModal from "../components/ModelModal.jsx";
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
 const COLUMNS = [
-  "קוד מודל",
-  "שם מודל",
-  "משפחה",
-  "תחום",
-  "בעלים",
-  "סולם דירוג",
-  "גרסה פעילה",
-  "גרסאות",
-  "מקטעים / שאלונים",
-  "עודכן לאחרונה",
-  "סטטוס",
-  "פעולות",
+  { key: "id", label: "קוד מודל", accessor: (r) => r.id },
+  { key: "name", label: "שם מודל", accessor: (r) => r.name },
+  { key: "family", label: "משפחה", accessor: (r) => r.family },
+  { key: "domain", label: "תחום", accessor: (r) => r.domain },
+  { key: "owner_name", label: "בעלים", accessor: (r) => r.owner_name },
+  { key: "rating_scale_name", label: "סולם דירוג", accessor: (r) => r.rating_scale_name },
+  { key: "active_version", label: "גרסה פעילה", accessor: (r) => r.active_version },
+  { key: "versions_count", label: "גרסאות", accessor: (r) => r.versions_count },
+  { key: "segments", label: "מקטעים / שאלונים", accessor: (r) => `${r.segments_count}/${r.questionnaires_count}` },
+  { key: "last_updated", label: "עודכן לאחרונה", accessor: (r) => r.last_updated },
+  { key: "status", label: "סטטוס", accessor: (r) => r.status },
+  { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
 ];
-
-const DOMAIN_OPTIONS = ["Corporate", "Project Finance", "Real Estate Project"];
-const STATUS_OPTIONS = ["פעיל", "טיוטה"];
 
 const selectStyle = {
   border: "1px solid var(--border)",
@@ -33,9 +32,6 @@ export default function ModelsPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [domainFilter, setDomainFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
   const [modal, setModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
@@ -53,16 +49,8 @@ export default function ModelsPage() {
   }, [loadModels]);
 
   const rows = data?.rows ?? [];
-
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return rows.filter((r) => {
-      if (domainFilter && r.domain !== domainFilter) return false;
-      if (statusFilter && r.status !== statusFilter) return false;
-      if (q && !r.name.toLowerCase().includes(q) && !r.id.toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }, [rows, search, domainFilter, statusFilter]);
+  const filterState = useColumnFilters(rows, COLUMNS);
+  const { search, setSearch, filteredRows } = filterState;
 
   function confirmDelete() {
     const model = deleteTarget;
@@ -80,27 +68,11 @@ export default function ModelsPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <input
             type="text"
-            placeholder="חיפוש שם / קוד"
+            placeholder="חיפוש חופשי..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ ...selectStyle, width: 180 }}
           />
-          <select value={domainFilter} onChange={(e) => setDomainFilter(e.target.value)} style={selectStyle}>
-            <option value="">הכל - תחום</option>
-            {DOMAIN_OPTIONS.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
-            <option value="">הכל - סטטוס</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
           <button
             type="button"
             onClick={() => setModal({ mode: "create" })}
@@ -125,15 +97,7 @@ export default function ModelsPage() {
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
         <table>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead columns={COLUMNS} filterState={filterState} />
           <tbody>
             {loading && (
               <tr>
