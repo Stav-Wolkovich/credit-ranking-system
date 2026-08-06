@@ -152,4 +152,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  getReports: () => request("/reports"),
+  createReport: (report) =>
+    request("/reports", {
+      method: "POST",
+      body: JSON.stringify(report),
+    }),
+  updateReport: (id, report) =>
+    request(`/reports/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(report),
+    }),
+  previewReport: (id) => request(`/reports/${id}/preview`),
 };

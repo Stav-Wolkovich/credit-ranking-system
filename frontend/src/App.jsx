@@ -15,6 +15,7 @@ import MatricesPage from "./pages/MatricesPage.jsx";
 import TeamsPage from "./pages/TeamsPage.jsx";
 import RatingScalesPage from "./pages/RatingScalesPage.jsx";
 import RolesPage from "./pages/RolesPage.jsx";
+import ReportsPage from "./pages/ReportsPage.jsx";
 
 const FALLBACK_NAV = [{ id: "report", label: "דוח דירוג פנימי", count: 12 }];
 
@@ -44,6 +45,8 @@ function PageContent({ page, navItems }) {
       return <RatingScalesPage />;
     case "roles":
       return <RolesPage />;
+    case "reports":
+      return <ReportsPage />;
     default: {
       const item = navItems.find((n) => n.id === page);
       return <PlaceholderPage label={item ? item.label : ""} />;

@@ -95,10 +95,22 @@ get_matrix() attaches x_values/y_values (ordered label lists) and
 cell_values (a row_position-major 2D array) when a grid has been
 defined; cells is derived from len(x_values) * len(y_values) once a
 grid exists, otherwise it stays a manually entered count.
+
+Reports columns are the fields the reports (דוחות) catalog page
+displays: id (report code, e.g. RPT-001), title, purpose (מטרה),
+content (תוכן — free text describing what the report contains),
+export_formats (comma-separated, e.g. "PDF,Excel,הדפסה"), and
+report_type. report_type selects which live-data engine backs preview
+and export for the 6 default reports (rating_detail, rating_summary,
+rating_comparison, audit_trail, rating_expiry, rating_distribution);
+it's None for user-created reports, which fall back to showing their
+own purpose/content as the "preview". get_rating_summary_rows(),
+get_rating_expiry_rows(), and get_rating_distribution() compute that
+live data from the real rankings table.
 """
 import re
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "rankings.db"
@@ -305,6 +317,57 @@ SEED_MATRIX_ROWS = [
     {"id": "TEST2", "name": "test 2", "type": "רשת 2D", "model_id": "RE-PROJ", "axes": 2, "cells": 4},
     {"id": "TEST-3", "name": "TEST", "type": "רשת 2D", "model_id": "PROJ-FIN", "axes": 2, "cells": 24},
     {"id": "TEST-CLONE", "name": "שכפול", "type": "רשת 2D", "model_id": "PROJ-FIN", "axes": 2, "cells": 20},
+]
+
+SEED_REPORT_ROWS = [
+    {
+        "id": "RPT-001",
+        "title": "דו\"ח דירוג פרטני עבור מנפיק נתון",
+        "purpose": "דו\"ח מפורט של תהליך דירוג בודד",
+        "content": "פרטי מנפיק/נכס, פרטי מודל, ציון כולל ודירוג, ציוני קבוצות שאלונים, פירוט כל תשובה עם ציון, היסטוריית אישורים, מסלול אודיט",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_detail",
+    },
+    {
+        "id": "RPT-002",
+        "title": "דו\"ח סיכום דירוגים",
+        "purpose": "סיכום כל הדירוגים הפעילים במערכת",
+        "content": "טבלה עם כל הדירוגים, סינון לפי: מודל, סטטוס, טווח תאריכים, דירוג. קיבוץ לפי מודל/דירוג/סטטוס. סטטיסטיקות סיכום.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_summary",
+    },
+    {
+        "id": "RPT-003",
+        "title": "דו\"ח השוואת דירוגים",
+        "purpose": "השוואת דירוגים Side-by-Side עבור אותו מנפיק/נכס לאורך זמן",
+        "content": "בחירת מנפיק/נכס ושני תאריכים. הצגה זה לצד זה. הדגשת שינויים: ירוק=שיפור, אדום=הרעה. ניתן להשוות גם יותר משני תאריכים, כדי לראות התפתחות דירוגים וציונים על פני זמן.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_comparison",
+    },
+    {
+        "id": "RPT-004",
+        "title": "דו\"ח אודיט",
+        "purpose": "דו\"ח מסלול ביקורת - כל הפעולות במערכת",
+        "content": "סינון לפי: משתמש, ישות, פעולה, טווח תאריכים. עמודות: תאריך/שעה, משתמש, פעולה, ישות, שדה, ערך ישן, ערך חדש, IP, Session.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "audit_trail",
+    },
+    {
+        "id": "RPT-005",
+        "title": "דו\"ח תוקף דירוגים",
+        "purpose": "מעקב אחר תפוגת דירוגים",
+        "content": "דירוגים שפג תוקפם, דירוגים שיפוגו ב-30/60/90 יום. סטטיסטיקות תפוגה, תחזית. מיון לפי דחיפות.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_expiry",
+    },
+    {
+        "id": "RPT-006",
+        "title": "דו\"ח התפלגות דירוגים",
+        "purpose": "ניתוח סטטיסטי של התפלגות הדירוגים",
+        "content": "גרף עוגה - התפלגות לפי דירוג (AAA-D). גרף עמודות - כמות לפי מודל. קו מגמה - שינויים לאורך זמן. מפת חום - דירוגים לפי מודל × דירוג.",
+        "export_formats": "PDF,Excel,הדפסה",
+        "report_type": "rating_distribution",
+    },
 ]
 
 
@@ -969,6 +1032,29 @@ def init_db():
         """
     )
     _seed_budget_matrix_grid(conn)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reports (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            purpose TEXT,
+            content TEXT,
+            export_formats TEXT NOT NULL DEFAULT 'PDF,Excel',
+            report_type TEXT
+        )
+        """
+    )
+    report_count = conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+    if report_count == 0:
+        conn.executemany(
+            """
+            INSERT INTO reports (id, title, purpose, content, export_formats, report_type)
+            VALUES (:id, :title, :purpose, :content, :export_formats, :report_type)
+            """,
+            SEED_REPORT_ROWS,
+        )
+        conn.commit()
 
     conn.commit()
     conn.close()
@@ -2401,3 +2487,142 @@ def duplicate_matrix(source_id: str, new_id: str, new_name: str):
     conn.commit()
     conn.close()
     return get_matrix(new_id)
+
+
+def get_all_reports():
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM reports ORDER BY rowid ASC").fetchall()]
+    conn.close()
+    for row in rows:
+        row["export_formats"] = [f for f in (row["export_formats"] or "").split(",") if f]
+    return rows
+
+
+def count_reports():
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_report(report_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    report = dict(row)
+    report["export_formats"] = [f for f in (report["export_formats"] or "").split(",") if f]
+    return report
+
+
+def report_code_taken(code: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM reports WHERE id = ? AND id != ?", (code, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM reports WHERE id = ?", (code,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def report_title_taken(title: str, exclude_id: str | None = None):
+    conn = get_connection()
+    if exclude_id is not None:
+        row = conn.execute("SELECT 1 FROM reports WHERE title = ? AND id != ?", (title, exclude_id)).fetchone()
+    else:
+        row = conn.execute("SELECT 1 FROM reports WHERE title = ?", (title,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_report(id: str, title: str, purpose: str | None, content: str | None, export_formats: list[str]):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO reports (id, title, purpose, content, export_formats, report_type) VALUES (?, ?, ?, ?, ?, NULL)",
+        (id, title, purpose, content, ",".join(export_formats)),
+    )
+    conn.commit()
+    conn.close()
+    return get_report(id)
+
+
+def update_report(
+    original_id: str, id: str, title: str, purpose: str | None, content: str | None, export_formats: list[str]
+):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE reports SET id = ?, title = ?, purpose = ?, content = ?, export_formats = ? WHERE id = ?",
+        (id, title, purpose, content, ",".join(export_formats), original_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_report(id)
+
+
+def get_rating_summary_rows():
+    """Real data backing RPT-002 (דו"ח סיכום דירוגים): every ranking with its
+    current model/team/status/rating, straight from the rankings table."""
+    rows = get_all_rankings()
+    return [
+        {
+            "code": r["code"],
+            "subject": r["subject"],
+            "model": r["model"],
+            "team": r["team"],
+            "status": r["status"],
+            "computed_rating": r["computed_rating"] or "-",
+            "final_rating": r["final_rating"] or "-",
+        }
+        for r in rows
+    ]
+
+
+def get_rating_expiry_rows():
+    """Real data backing RPT-005 (דו"ח תוקף דירוגים): every בתוקף ranking with
+    its days-until-expiry and an urgency bucket, sorted most-urgent first."""
+    today = date.today()
+    rows = get_all_rankings()
+    out = []
+    for r in rows:
+        if r["status"] != "בתוקף" or not r["valid_until"]:
+            continue
+        valid_until = datetime.strptime(r["valid_until"], "%d/%m/%Y").date()
+        days_left = (valid_until - today).days
+        if days_left <= 0:
+            urgency = "פג תוקף"
+        elif days_left <= 30:
+            urgency = "דחוף (30 יום)"
+        elif days_left <= 60:
+            urgency = "בקרוב (60 יום)"
+        elif days_left <= 90:
+            urgency = "קרב (90 יום)"
+        else:
+            urgency = "תקין"
+        out.append(
+            {
+                "code": r["code"],
+                "subject": r["subject"],
+                "model": r["model"],
+                "valid_until": r["valid_until"],
+                "days_left": days_left,
+                "urgency": urgency,
+            }
+        )
+    out.sort(key=lambda x: x["days_left"])
+    return out
+
+
+def get_rating_distribution():
+    """Real data backing RPT-006 (דו"ח התפלגות דירוגים): rating and model
+    counts across every ranking, computed from the rankings table."""
+    rows = get_all_rankings()
+    by_rating: dict[str, int] = {}
+    by_model: dict[str, int] = {}
+    for r in rows:
+        rating = r["final_rating"] or r["computed_rating"]
+        if rating:
+            by_rating[rating] = by_rating.get(rating, 0) + 1
+        if r["model"]:
+            by_model[r["model"]] = by_model.get(r["model"], 0) + 1
+    return {"by_rating": by_rating, "by_model": by_model}

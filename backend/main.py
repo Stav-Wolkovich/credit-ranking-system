@@ -5,8 +5,12 @@ Ranking data is persisted in SQLite (see database.py) rather than kept
 in-memory, so it survives restarts and can be queried/updated like a real
 data store.
 """
+import csv
+import io
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date
@@ -40,6 +44,7 @@ NAV_ITEMS = [
     {"id": "teams", "label": "צוותים"},
     {"id": "roles", "label": "תפקידים"},
     {"id": "users", "label": "משתמשים"},
+    {"id": "reports", "label": "דוחות"},
     {"id": "audit-log", "label": "יומן ביקורת"},
 ]
 
@@ -180,6 +185,14 @@ class MatrixDuplicateInput(BaseModel):
     name: str
 
 
+class ReportInput(BaseModel):
+    id: str
+    title: str
+    purpose: Optional[str] = None
+    content: Optional[str] = None
+    export_formats: List[str] = ["PDF", "Excel"]
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -202,6 +215,7 @@ NAV_COUNTS = {
     "matrices": database.count_matrices,
     "teams": database.count_teams,
     "roles": database.count_roles,
+    "reports": database.count_reports,
 }
 
 
@@ -841,3 +855,120 @@ def duplicate_matrix(matrix_id: str, payload: MatrixDuplicateInput):
     if database.matrix_name_taken(new_name):
         raise HTTPException(status_code=409, detail="מטריצה עם שם זה כבר קיימת")
     return database.duplicate_matrix(matrix_id, new_id, new_name)
+
+
+@app.get("/api/reports")
+def get_reports():
+    rows = database.get_all_reports()
+    return {"rows": rows, "total": len(rows)}
+
+
+def _clean_report_input(payload: ReportInput):
+    report_id = payload.id.strip()
+    title = payload.title.strip()
+    if not report_id or not title:
+        raise HTTPException(status_code=422, detail="קוד דוח וכותרת הם שדות חובה")
+    return {
+        "id": report_id,
+        "title": title,
+        "purpose": (payload.purpose or "").strip() or None,
+        "content": (payload.content or "").strip() or None,
+        "export_formats": payload.export_formats,
+    }
+
+
+@app.post("/api/reports", status_code=201)
+def create_report(payload: ReportInput):
+    cleaned = _clean_report_input(payload)
+    if database.report_code_taken(cleaned["id"]):
+        raise HTTPException(status_code=409, detail="דוח עם קוד זה כבר קיים")
+    if database.report_title_taken(cleaned["title"]):
+        raise HTTPException(status_code=409, detail="דוח עם כותרת זו כבר קיים")
+    return database.create_report(**cleaned)
+
+
+@app.put("/api/reports/{report_id}")
+def update_report(report_id: str, payload: ReportInput):
+    if not database.get_report(report_id):
+        raise HTTPException(status_code=404, detail="דוח לא נמצא")
+    cleaned = _clean_report_input(payload)
+    if database.report_code_taken(cleaned["id"], exclude_id=report_id):
+        raise HTTPException(status_code=409, detail="דוח עם קוד זה כבר קיים")
+    if database.report_title_taken(cleaned["title"], exclude_id=report_id):
+        raise HTTPException(status_code=409, detail="דוח עם כותרת זו כבר קיים")
+    return database.update_report(report_id, **cleaned)
+
+
+RATING_SUMMARY_COLUMNS = [
+    {"key": "code", "label": "קוד"},
+    {"key": "subject", "label": "נושא"},
+    {"key": "model", "label": "מודל"},
+    {"key": "team", "label": "צוות"},
+    {"key": "status", "label": "סטטוס"},
+    {"key": "computed_rating", "label": "דירוג מחושב"},
+    {"key": "final_rating", "label": "דירוג סופי"},
+]
+
+RATING_EXPIRY_COLUMNS = [
+    {"key": "code", "label": "קוד"},
+    {"key": "subject", "label": "נושא"},
+    {"key": "model", "label": "מודל"},
+    {"key": "valid_until", "label": "תוקף עד"},
+    {"key": "days_left", "label": "ימים לפקיעה"},
+    {"key": "urgency", "label": "דחיפות"},
+]
+
+
+@app.get("/api/reports/{report_id}/preview")
+def preview_report(report_id: str):
+    report = database.get_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="דוח לא נמצא")
+    if report["report_type"] == "rating_summary":
+        return {"type": "table", "columns": RATING_SUMMARY_COLUMNS, "rows": database.get_rating_summary_rows()}
+    if report["report_type"] == "rating_expiry":
+        return {"type": "table", "columns": RATING_EXPIRY_COLUMNS, "rows": database.get_rating_expiry_rows()}
+    if report["report_type"] == "rating_distribution":
+        return {"type": "distribution", **database.get_rating_distribution()}
+    return {"type": "spec", "purpose": report["purpose"], "content": report["content"]}
+
+
+@app.get("/api/reports/{report_id}/export.csv")
+def export_report_csv(report_id: str):
+    report = database.get_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="דוח לא נמצא")
+
+    buffer = io.StringIO()
+    buffer.write("﻿")  # BOM so Excel opens the UTF-8 Hebrew text correctly
+    writer = csv.writer(buffer)
+
+    if report["report_type"] == "rating_summary":
+        writer.writerow([c["label"] for c in RATING_SUMMARY_COLUMNS])
+        for row in database.get_rating_summary_rows():
+            writer.writerow([row[c["key"]] for c in RATING_SUMMARY_COLUMNS])
+    elif report["report_type"] == "rating_expiry":
+        writer.writerow([c["label"] for c in RATING_EXPIRY_COLUMNS])
+        for row in database.get_rating_expiry_rows():
+            writer.writerow([row[c["key"]] for c in RATING_EXPIRY_COLUMNS])
+    elif report["report_type"] == "rating_distribution":
+        dist = database.get_rating_distribution()
+        writer.writerow(["דירוג", "כמות"])
+        for label, count in dist["by_rating"].items():
+            writer.writerow([label, count])
+        writer.writerow([])
+        writer.writerow(["מודל", "כמות"])
+        for label, count in dist["by_model"].items():
+            writer.writerow([label, count])
+    else:
+        writer.writerow(["שדה", "ערך"])
+        writer.writerow(["קוד דוח", report["id"]])
+        writer.writerow(["כותרת", report["title"]])
+        writer.writerow(["מטרה", report["purpose"] or ""])
+        writer.writerow(["תוכן", report["content"] or ""])
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{report_id}.csv"'},
+    )
