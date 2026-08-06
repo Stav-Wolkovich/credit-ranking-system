@@ -3,51 +3,9 @@ import { api } from "../api.js";
 import { PageHeader, ErrorBanner } from "../components/ui.jsx";
 import ReportModal from "../components/ReportModal.jsx";
 import ReportPreviewModal from "../components/ReportPreviewModal.jsx";
+import { buildReportPrintHtml } from "../reportExport.js";
 
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (c) => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
-}
-
-function buildPrintHtml(report, preview) {
-  let contentHtml;
-  if (preview.type === "table") {
-    contentHtml = `
-      <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%;font-size:13px;">
-        <thead><tr>${preview.columns
-          .map((c) => `<th style="background:#1a2542;color:#fff;">${escapeHtml(c.label)}</th>`)
-          .join("")}</tr></thead>
-        <tbody>${preview.rows
-          .map(
-            (row) =>
-              `<tr>${preview.columns.map((c) => `<td>${escapeHtml(row[c.key])}</td>`).join("")}</tr>`
-          )
-          .join("")}</tbody>
-      </table>`;
-  } else if (preview.type === "distribution") {
-    const section = (title, counts) => `
-      <h3>${escapeHtml(title)}</h3>
-      <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;font-size:13px;margin-bottom:16px;">
-        <tbody>${Object.entries(counts)
-          .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${v}</td></tr>`)
-          .join("")}</tbody>
-      </table>`;
-    contentHtml = section("לפי דירוג", preview.by_rating) + section("לפי מודל", preview.by_model);
-  } else {
-    contentHtml = `
-      <p><strong>מטרה:</strong> ${escapeHtml(preview.purpose)}</p>
-      <p><strong>תוכן:</strong> ${escapeHtml(preview.content)}</p>`;
-  }
-  return `<!doctype html>
-    <html dir="rtl" lang="he">
-      <head><meta charset="utf-8"><title>${escapeHtml(report.id)} - ${escapeHtml(report.title)}</title></head>
-      <body style="font-family: Arial, sans-serif; padding: 24px;">
-        <h2>${escapeHtml(report.id)}: ${escapeHtml(report.title)}</h2>
-        ${contentHtml}
-      </body>
-    </html>`;
-}
+const ENTITY_SELECT_REPORT_TYPES = ["rating_detail", "rating_comparison"];
 
 export default function ReportsPage() {
   const [data, setData] = useState(null);
@@ -73,6 +31,12 @@ export default function ReportsPage() {
   const rows = data?.rows ?? [];
 
   function handleExportExcel(report) {
+    if (ENTITY_SELECT_REPORT_TYPES.includes(report.report_type)) {
+      // Needs a מנפיק/נכס selected first — hand off to the preview modal,
+      // which exports with the chosen entity once one is picked.
+      setPreviewTarget(report);
+      return;
+    }
     const link = document.createElement("a");
     link.href = `/api/reports/${encodeURIComponent(report.id)}/export.csv`;
     link.download = `${report.id}.csv`;
@@ -82,6 +46,10 @@ export default function ReportsPage() {
   }
 
   async function handleExportPdf(report) {
+    if (ENTITY_SELECT_REPORT_TYPES.includes(report.report_type)) {
+      setPreviewTarget(report);
+      return;
+    }
     // Must open the window synchronously, inside the click handler and
     // before any await — otherwise the browser no longer sees it as tied
     // to the user gesture and blocks it as a popup.
@@ -95,7 +63,7 @@ export default function ReportsPage() {
     try {
       const preview = await api.previewReport(report.id);
       win.document.open();
-      win.document.write(buildPrintHtml(report, preview));
+      win.document.write(buildReportPrintHtml(report, preview));
       win.document.close();
       win.focus();
       setTimeout(() => win.print(), 300);

@@ -2626,3 +2626,70 @@ def get_rating_distribution():
         if r["model"]:
             by_model[r["model"]] = by_model.get(r["model"], 0) + 1
     return {"by_rating": by_rating, "by_model": by_model}
+
+
+def _questionnaire_groups_for_model(conn, model_id: str):
+    """The questionnaire groups (and their weights) assigned to a model —
+    real structural data, standing in for RPT-001's 'ציוני קבוצות שאלונים'
+    since the system doesn't store per-ranking submitted answers/scores."""
+    if not model_id:
+        return []
+    rows = conn.execute(
+        """
+        SELECT q.name, mq.weight FROM model_questionnaires mq
+        JOIN questionnaires q ON q.id = mq.questionnaire_id
+        WHERE mq.model_id = ? ORDER BY mq.position ASC
+        """,
+        (model_id,),
+    ).fetchall()
+    return [{"name": r["name"], "weight": r["weight"]} for r in rows]
+
+
+def get_entity_rating_detail(kind: str, entity_id: str):
+    """Real data backing RPT-001 (per-entity detail) and RPT-003 (compare
+    over time) for a selected מנפיק/נכס: the entity's own details plus
+    every ranking process where it's the framework being rated, each with
+    its model's questionnaire-group weights. Returns None if the entity
+    itself isn't found. Approval-history and audit-trail data aren't
+    modeled anywhere in the system yet, so callers should treat their
+    absence as "not available" rather than synthesize it."""
+    if kind == "מנפיק":
+        entity = get_issuer(entity_id)
+    elif kind == "נכס":
+        entity = get_asset(entity_id)
+    else:
+        return None
+    if not entity:
+        return None
+
+    conn = get_connection()
+    all_rows = get_all_rankings()
+    matches = [
+        r
+        for r in all_rows
+        if (kind == "מנפיק" and r["framework_issuer_id"] == entity_id)
+        or (kind == "נכס" and r["framework_asset_id"] == entity_id)
+    ]
+    rankings = []
+    for r in matches:
+        rankings.append(
+            {
+                "id": r["id"],
+                "code": r["code"],
+                "subject": r["subject"],
+                "model": r["model"],
+                "team": r["team"],
+                "status": r["status"],
+                "computed_score": r["computed_score"],
+                "computed_rating": r["computed_rating"],
+                "final_score": r["final_score"],
+                "final_rating": r["final_rating"],
+                "approval_date": r["approval_date"],
+                "valid_from": r["valid_from"],
+                "valid_until": r["valid_until"],
+                "questionnaire_groups": _questionnaire_groups_for_model(conn, r["model_id"]),
+            }
+        )
+    conn.close()
+    rankings.sort(key=lambda r: (r["approval_date"] or "", r["id"]))
+    return {"entity_kind": kind, "entity": entity, "rankings": rankings}

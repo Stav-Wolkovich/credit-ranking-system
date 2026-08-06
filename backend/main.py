@@ -919,11 +919,28 @@ RATING_EXPIRY_COLUMNS = [
 ]
 
 
+ENTITY_SELECT_REPORT_TYPES = ("rating_detail", "rating_comparison")
+
+
 @app.get("/api/reports/{report_id}/preview")
-def preview_report(report_id: str):
+def preview_report(
+    report_id: str,
+    kind: Optional[str] = None,
+    entity_id: Optional[str] = None,
+):
     report = database.get_report(report_id)
     if not report:
         raise HTTPException(status_code=404, detail="דוח לא נמצא")
+    if report["report_type"] in ENTITY_SELECT_REPORT_TYPES:
+        if not kind or not entity_id:
+            return {"type": "entity_select"}
+        if kind not in ("מנפיק", "נכס"):
+            raise HTTPException(status_code=422, detail="סוג ישות לא תקין")
+        detail = database.get_entity_rating_detail(kind, entity_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail="הישות לא נמצאה")
+        preview_type = "entity_detail" if report["report_type"] == "rating_detail" else "entity_comparison"
+        return {"type": preview_type, **detail}
     if report["report_type"] == "rating_summary":
         return {"type": "table", "columns": RATING_SUMMARY_COLUMNS, "rows": database.get_rating_summary_rows()}
     if report["report_type"] == "rating_expiry":
@@ -934,7 +951,11 @@ def preview_report(report_id: str):
 
 
 @app.get("/api/reports/{report_id}/export.csv")
-def export_report_csv(report_id: str):
+def export_report_csv(
+    report_id: str,
+    kind: Optional[str] = None,
+    entity_id: Optional[str] = None,
+):
     report = database.get_report(report_id)
     if not report:
         raise HTTPException(status_code=404, detail="דוח לא נמצא")
@@ -943,7 +964,27 @@ def export_report_csv(report_id: str):
     buffer.write("﻿")  # BOM so Excel opens the UTF-8 Hebrew text correctly
     writer = csv.writer(buffer)
 
-    if report["report_type"] == "rating_summary":
+    if report["report_type"] in ENTITY_SELECT_REPORT_TYPES:
+        if not kind or not entity_id:
+            raise HTTPException(status_code=422, detail="יש לבחור מנפיק או נכס")
+        detail = database.get_entity_rating_detail(kind, entity_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail="הישות לא נמצאה")
+        writer.writerow(["סוג ישות", kind])
+        writer.writerow(["ישות", detail["entity"]["name"]])
+        writer.writerow([])
+        writer.writerow(
+            ["קוד", "נושא", "מודל", "צוות", "סטטוס", "ציון מחושב", "דירוג מחושב", "ציון סופי", "דירוג סופי", "תוקף מ-", "תוקף עד"]
+        )
+        for r in detail["rankings"]:
+            writer.writerow(
+                [
+                    r["code"], r["subject"], r["model"], r["team"], r["status"],
+                    r["computed_score"], r["computed_rating"], r["final_score"], r["final_rating"],
+                    r["valid_from"], r["valid_until"],
+                ]
+            )
+    elif report["report_type"] == "rating_summary":
         writer.writerow([c["label"] for c in RATING_SUMMARY_COLUMNS])
         for row in database.get_rating_summary_rows():
             writer.writerow([row[c["key"]] for c in RATING_SUMMARY_COLUMNS])

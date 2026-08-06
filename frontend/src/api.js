@@ -163,5 +163,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(report),
     }),
-  previewReport: (id) => request(`/reports/${id}/preview`),
+  previewReport: (id, params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/reports/${id}/preview${qs ? `?${qs}` : ""}`);
+  },
 };
