@@ -927,6 +927,8 @@ def preview_report(
     report_id: str,
     kind: Optional[str] = None,
     entity_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ):
     report = database.get_report(report_id)
     if not report:
@@ -936,7 +938,7 @@ def preview_report(
             return {"type": "entity_select"}
         if kind not in ("מנפיק", "נכס"):
             raise HTTPException(status_code=422, detail="סוג ישות לא תקין")
-        detail = database.get_entity_rating_detail(kind, entity_id)
+        detail = database.get_entity_rating_detail(kind, entity_id, date_from, date_to)
         if not detail:
             raise HTTPException(status_code=404, detail="הישות לא נמצאה")
         preview_type = "entity_detail" if report["report_type"] == "rating_detail" else "entity_comparison"
@@ -955,6 +957,8 @@ def export_report_csv(
     report_id: str,
     kind: Optional[str] = None,
     entity_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ):
     report = database.get_report(report_id)
     if not report:
@@ -967,7 +971,7 @@ def export_report_csv(
     if report["report_type"] in ENTITY_SELECT_REPORT_TYPES:
         if not kind or not entity_id:
             raise HTTPException(status_code=422, detail="יש לבחור מנפיק או נכס")
-        detail = database.get_entity_rating_detail(kind, entity_id)
+        detail = database.get_entity_rating_detail(kind, entity_id, date_from, date_to)
         if not detail:
             raise HTTPException(status_code=404, detail="הישות לא נמצאה")
         writer.writerow(["סוג ישות", kind])

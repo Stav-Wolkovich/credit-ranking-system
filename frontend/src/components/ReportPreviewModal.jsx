@@ -202,12 +202,29 @@ function EntityComparisonView({ preview }) {
   );
 }
 
-function EntityPicker({ kind, onKindChange, entityId, onEntityChange, issuers, assets, onSubmit, canSubmit, loading }) {
+function EntityPicker({
+  kind,
+  onKindChange,
+  entityId,
+  onEntityChange,
+  issuers,
+  assets,
+  showDateRange,
+  dateFrom,
+  onDateFromChange,
+  dateTo,
+  onDateToChange,
+  onSubmit,
+  canSubmit,
+  loading,
+}) {
   const options = kind === "מנפיק" ? issuers : assets;
   return (
     <div>
       <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 8 }}>
-        יש לבחור מנפיק או נכס כדי להציג את הדוח:
+        {showDateRange
+          ? "יש לבחור מנפיק או נכס וטווח תאריכים כדי להציג את ההשוואה:"
+          : "יש לבחור מנפיק או נכס כדי להציג את הדוח:"}
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         {["מנפיק", "נכס"].map((k) => (
@@ -251,6 +268,45 @@ function EntityPicker({ kind, onKindChange, entityId, onEntityChange, issuers, a
           </option>
         ))}
       </select>
+      {showDateRange && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>
+            טווח תאריכים (לפי תאריך אישור) — ניתן להשאיר ריק להצגת כל התהליכים
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11.5, color: "var(--text-light)", marginBottom: 2 }}>מתאריך</div>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => onDateFromChange(e.target.value)}
+                style={{
+                  width: "100%",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  fontSize: 13,
+                }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11.5, color: "var(--text-light)", marginBottom: 2 }}>עד תאריך</div>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => onDateToChange(e.target.value)}
+                style={{
+                  width: "100%",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  fontSize: 13,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
       <button
         type="button"
         onClick={onSubmit}
@@ -275,6 +331,7 @@ function EntityPicker({ kind, onKindChange, entityId, onEntityChange, issuers, a
 
 export default function ReportPreviewModal({ report, onClose }) {
   const isEntityReport = ENTITY_SELECT_REPORT_TYPES.includes(report.report_type);
+  const showDateRange = report.report_type === "rating_comparison";
 
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState(null);
@@ -282,6 +339,8 @@ export default function ReportPreviewModal({ report, onClose }) {
 
   const [kind, setKind] = useState("מנפיק");
   const [entityId, setEntityId] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [issuers, setIssuers] = useState([]);
   const [assets, setAssets] = useState([]);
 
@@ -302,12 +361,21 @@ export default function ReportPreviewModal({ report, onClose }) {
       .catch((err) => setError(err.message));
   }, [report.id, isEntityReport]);
 
+  function entityParams() {
+    const params = { kind, entity_id: entityId };
+    if (showDateRange) {
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+    }
+    return params;
+  }
+
   function handleSubmitEntity() {
     if (!entityId) return;
     setLoading(true);
     setError(null);
     api
-      .previewReport(report.id, { kind, entity_id: entityId })
+      .previewReport(report.id, entityParams())
       .then(setPreview)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -315,7 +383,7 @@ export default function ReportPreviewModal({ report, onClose }) {
 
   function handleExportExcel() {
     const link = document.createElement("a");
-    const qs = new URLSearchParams({ kind, entity_id: entityId }).toString();
+    const qs = new URLSearchParams(entityParams()).toString();
     link.href = `/api/reports/${encodeURIComponent(report.id)}/export.csv?${qs}`;
     link.download = `${report.id}.csv`;
     document.body.appendChild(link);
@@ -396,6 +464,11 @@ export default function ReportPreviewModal({ report, onClose }) {
               onEntityChange={setEntityId}
               issuers={issuers}
               assets={assets}
+              showDateRange={showDateRange}
+              dateFrom={dateFrom}
+              onDateFromChange={setDateFrom}
+              dateTo={dateTo}
+              onDateToChange={setDateTo}
               onSubmit={handleSubmitEntity}
               canSubmit={Boolean(entityId)}
               loading={loading}

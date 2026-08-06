@@ -2645,14 +2645,22 @@ def _questionnaire_groups_for_model(conn, model_id: str):
     return [{"name": r["name"], "weight": r["weight"]} for r in rows]
 
 
-def get_entity_rating_detail(kind: str, entity_id: str):
+def get_entity_rating_detail(
+    kind: str, entity_id: str, date_from: str | None = None, date_to: str | None = None
+):
     """Real data backing RPT-001 (per-entity detail) and RPT-003 (compare
     over time) for a selected מנפיק/נכס: the entity's own details plus
     every ranking process where it's the framework being rated, each with
     its model's questionnaire-group weights. Returns None if the entity
     itself isn't found. Approval-history and audit-trail data aren't
     modeled anywhere in the system yet, so callers should treat their
-    absence as "not available" rather than synthesize it."""
+    absence as "not available" rather than synthesize it.
+
+    date_from/date_to (ISO yyyy-mm-dd) restrict the result to rankings
+    approved within that window — RPT-003's time-frame selection. Rankings
+    with no approval_date (drafts/in-progress) have no point in time to
+    place on that timeline, so a date filter excludes them; leaving both
+    unset returns every matching ranking regardless of approval status."""
     if kind == "מנפיק":
         entity = get_issuer(entity_id)
     elif kind == "נכס":
@@ -2670,6 +2678,14 @@ def get_entity_rating_detail(kind: str, entity_id: str):
         if (kind == "מנפיק" and r["framework_issuer_id"] == entity_id)
         or (kind == "נכס" and r["framework_asset_id"] == entity_id)
     ]
+    if date_from or date_to:
+        matches = [
+            r
+            for r in matches
+            if r["approval_date"]
+            and (not date_from or r["approval_date"] >= date_from)
+            and (not date_to or r["approval_date"] <= date_to)
+        ]
     rankings = []
     for r in matches:
         rankings.append(
