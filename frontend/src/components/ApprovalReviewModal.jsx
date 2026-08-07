@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { api } from "../api.js";
 import { Badge } from "./ui.jsx";
+import RejectRatingModal from "./RejectRatingModal.jsx";
 
 function Row({ label, value }) {
   return (
@@ -14,6 +15,7 @@ function Row({ label, value }) {
 export default function ApprovalReviewModal({ process, stage, onCancel, onApproved }) {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
 
   const title = stage === "manager" ? "בדיקה ואישור מנהל" : "בדיקה ואישור ועדה";
   const approveLabel = stage === "manager" ? "אישור מנהל" : "אישור ועדה";
@@ -113,6 +115,26 @@ export default function ApprovalReviewModal({ process, stage, onCancel, onApprov
           >
             ביטול
           </button>
+          {stage === "committee" && (
+            <button
+              type="button"
+              onClick={() => setRejecting(true)}
+              disabled={saving}
+              style={{
+                background: "#fff",
+                color: "#b52d2d",
+                border: "1px solid #e0a0a0",
+                borderRadius: 6,
+                padding: "9px 18px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: saving ? "default" : "pointer",
+                opacity: saving ? 0.7 : 1,
+              }}
+            >
+              ✕ דחיית דירוג
+            </button>
+          )}
           <button
             type="button"
             onClick={handleApprove}
@@ -133,6 +155,17 @@ export default function ApprovalReviewModal({ process, stage, onCancel, onApprov
           </button>
         </div>
       </div>
+
+      {rejecting && (
+        <RejectRatingModal
+          process={process}
+          onCancel={() => setRejecting(false)}
+          onRejected={(updated) => {
+            setRejecting(false);
+            onApproved(updated);
+          }}
+        />
+      )}
     </div>
   );
 }

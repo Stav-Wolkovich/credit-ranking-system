@@ -119,9 +119,9 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
         const { total, answered } = countAnswered(s.questionnaires);
         setResult({
           completion: total ? Math.round((answered / total) * 100) : 0,
-          complete: false,
-          score: null,
-          rating: null,
+          complete: total > 0 && answered === total,
+          score: process.computed_score ?? null,
+          rating: process.computed_rating ?? null,
         });
       })
       .catch((err) => setError(err.message))
@@ -272,6 +272,39 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                   <div style={{ fontSize: 11, color: "#1e7e3c", marginTop: 4, fontWeight: 600 }}>✓ הדירוג הושלם</div>
                 )}
               </div>
+
+              {process.final_rating && (
+                <div
+                  style={{
+                    border: `1px solid ${process.status === "נדחה בועדה" ? "#e0a0a0" : "var(--border)"}`,
+                    background: process.status === "נדחה בועדה" ? "#fbe9e9" : "#f7f8fa",
+                    borderRadius: 8,
+                    padding: "10px 14px",
+                    textAlign: "center",
+                  }}
+                >
+                  <div style={{ fontSize: 11.5, color: "var(--text-mid)", marginBottom: 4 }}>דירוג סופי</div>
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 8 }} dir="ltr">
+                    <span
+                      style={{
+                        fontSize: 18,
+                        fontWeight: 700,
+                        color: process.status === "נדחה בועדה" ? "#b52d2d" : "var(--text-dark)",
+                      }}
+                    >
+                      {process.final_rating}
+                    </span>
+                    {process.final_score != null && (
+                      <span style={{ fontSize: 13, color: "var(--text-mid)" }}>{process.final_score}</span>
+                    )}
+                  </div>
+                  {process.status === "נדחה בועדה" && (
+                    <div style={{ fontSize: 11, color: "#b52d2d", marginTop: 4, fontWeight: 600 }}>
+                      ✕ נדחה על ידי הוועדה — שונה מהדירוג המחושב
+                    </div>
+                  )}
+                </div>
+              )}
 
               {structure.rating_scale_levels?.length > 0 && (
                 <div>

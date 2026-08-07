@@ -294,6 +294,28 @@ def approve_committee(process_id: str):
     return database.update_process_status(process_id, "אושר בוועדה", "green")
 
 
+class RejectCommitteeInput(BaseModel):
+    final_rating: str
+
+
+@app.post("/api/approvals/{process_id}/reject-committee")
+def reject_committee(process_id: str, payload: RejectCommitteeInput):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "ממתין לוועדה":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור ועדה")
+    final_rating = payload.final_rating.strip()
+    if not final_rating:
+        raise HTTPException(status_code=422, detail="יש לבחור דירוג")
+    model_id = database.get_process_model_id(process_id)
+    structure = database.get_process_scoring_structure(process_id) if model_id else None
+    valid_labels = {lvl["label"] for lvl in (structure["rating_scale_levels"] if structure else [])}
+    if valid_labels and final_rating not in valid_labels:
+        raise HTTPException(status_code=422, detail="הדירוג שנבחר אינו חלק מסולם הדירוג של המודל")
+    return database.reject_committee_process(process_id, final_rating)
+
+
 @app.get("/api/report/rows/{process_id}")
 def get_row(process_id: str):
     row = database.get_ranking(process_id)

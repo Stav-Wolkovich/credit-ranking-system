@@ -22,6 +22,11 @@ Canonical ranking statuses: טיוטה, בעבודה, ממתין לאישור, �
 ממתין לוועדה, אושר ועדה, בתוקף, פג תוקף — plus the legacy בוטל/מושהה
 still used by a couple of seed rows.
 
+ranking_processes.status also includes נדחה בועדה: the ועדה rejected the
+model's computed rating and recorded its own final_rating instead (see
+reject_committee_process()). The process leaves the committee queue but
+isn't otherwise terminal.
+
 Ranking Processes columns are the fields the processes page displays: id,
 subject_issuer_id, code, framework_issuer_id, status, tone, final_score,
 final_rating, computed_score, computed_rating, completion — same
@@ -1707,6 +1712,22 @@ def update_process_status(process_id: str, status: str, tone: str):
             f"התהליך {process_id} ({process['code']}) אושר על ידי מנהל וממתין כעת לאישור ועדה",
         )
     return process
+
+
+def reject_committee_process(process_id: str, final_rating: str):
+    """The ועדה can reject the model's computed rating and record its own
+    final_rating instead — computed_rating stays untouched so both are
+    visible side by side (the processes/approvals pages already show
+    ציון/דירוג מחושב and ציון/דירוג סופי as separate columns). The process
+    leaves the committee queue: status moves to "נדחה בועדה"."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET final_rating = ?, status = ?, tone = ? WHERE id = ?",
+        (final_rating, "נדחה בועדה", "red", process_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_process(process_id)
 
 
 def _next_process_id():
