@@ -2343,6 +2343,18 @@ def update_model(
     return get_model(id)
 
 
+STATUS_TONE = {"טיוטה": "gray", "פעיל": "green"}
+
+
+def update_model_status(model_id: str, status: str):
+    tone = STATUS_TONE.get(status, "gray")
+    conn = get_connection()
+    conn.execute("UPDATE models SET status = ?, tone = ? WHERE id = ?", (status, tone, model_id))
+    conn.commit()
+    conn.close()
+    return get_model(model_id)
+
+
 def delete_model(model_id: str):
     conn = get_connection()
     conn.execute("DELETE FROM model_questionnaires WHERE model_id = ?", (model_id,))
@@ -2637,6 +2649,17 @@ def update_questionnaire(
     conn.commit()
     conn.close()
     return get_questionnaire(id)
+
+
+def update_questionnaire_status(questionnaire_id: str, status: str):
+    tone = STATUS_TONE.get(status, "gray")
+    conn = get_connection()
+    conn.execute(
+        "UPDATE questionnaires SET status = ?, tone = ? WHERE id = ?", (status, tone, questionnaire_id)
+    )
+    conn.commit()
+    conn.close()
+    return get_questionnaire(questionnaire_id)
 
 
 def delete_questionnaire(questionnaire_id: str):

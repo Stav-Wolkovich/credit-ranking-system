@@ -332,8 +332,13 @@ class ProcessCreateInput(BaseModel):
 def create_process(payload: ProcessCreateInput):
     if payload.kind not in ("מנפיק", "נכס"):
         raise HTTPException(status_code=422, detail="סוג מסגרת לא תקין")
-    if not database.get_model(payload.model_id):
+    model = database.get_model(payload.model_id)
+    if not model:
         raise HTTPException(status_code=422, detail="מודל דירוג לא נמצא")
+    if model["status"] != "פעיל":
+        raise HTTPException(status_code=422, detail="ניתן לבחור רק מודל בסטטוס פעיל")
+    if model["questionnaires_count"] < 1:
+        raise HTTPException(status_code=422, detail="למודל הנבחר אין שאלונים מקושרים")
     if payload.kind == "מנפיק":
         if not payload.framework_issuer_id or not database.get_issuer(payload.framework_issuer_id):
             raise HTTPException(status_code=422, detail="יש לבחור מנפיק קיים")
@@ -594,6 +599,15 @@ def delete_model(model_id: str):
     database.delete_model(model_id)
 
 
+@app.patch("/api/models/{model_id}/status")
+def set_model_status(model_id: str, update: StatusUpdate):
+    if not database.get_model(model_id):
+        raise HTTPException(status_code=404, detail="מודל לא נמצא")
+    if update.status not in ("טיוטה", "פעיל"):
+        raise HTTPException(status_code=422, detail="סטטוס לא תקין")
+    return database.update_model_status(model_id, update.status)
+
+
 @app.get("/api/rating-scales")
 def get_rating_scales():
     rows = database.get_all_rating_scales()
@@ -730,6 +744,15 @@ def delete_questionnaire(questionnaire_id: str):
     if not database.get_questionnaire(questionnaire_id):
         raise HTTPException(status_code=404, detail="שאלון לא נמצא")
     database.delete_questionnaire(questionnaire_id)
+
+
+@app.patch("/api/questionnaires/{questionnaire_id}/status")
+def set_questionnaire_status(questionnaire_id: str, update: StatusUpdate):
+    if not database.get_questionnaire(questionnaire_id):
+        raise HTTPException(status_code=404, detail="שאלון לא נמצא")
+    if update.status not in ("טיוטה", "פעיל"):
+        raise HTTPException(status_code=422, detail="סטטוס לא תקין")
+    return database.update_questionnaire_status(questionnaire_id, update.status)
 
 
 @app.post("/api/questionnaires/{questionnaire_id}/duplicate", status_code=201)

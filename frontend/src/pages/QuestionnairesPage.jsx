@@ -27,6 +27,8 @@ const selectStyle = {
   background: "#fff",
 };
 
+const STATUS_TONE = { "טיוטה": "gray", "פעיל": "green" };
+
 export default function QuestionnairesPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -57,6 +59,14 @@ export default function QuestionnairesPage() {
     setDeleteTarget(null);
     api
       .deleteQuestionnaire(questionnaire.id)
+      .then(() => loadQuestionnaires())
+      .catch((err) => setError(err.message));
+  }
+
+  function toggleStatus(questionnaire) {
+    const nextStatus = questionnaire.status === "פעיל" ? "טיוטה" : "פעיל";
+    api
+      .updateQuestionnaireStatus(questionnaire.id, { status: nextStatus, tone: STATUS_TONE[nextStatus] })
       .then(() => loadQuestionnaires())
       .catch((err) => setError(err.message));
   }
@@ -119,7 +129,25 @@ export default function QuestionnairesPage() {
                 <td style={{ padding: "12px 16px" }}>{r.name}</td>
                 <td style={{ padding: "12px 16px" }}>{r.version}</td>
                 <td style={{ padding: "12px 16px" }}>
-                  <Badge label={r.status} tone={r.tone} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Badge label={r.status} tone={r.tone} />
+                    <button
+                      type="button"
+                      onClick={() => toggleStatus(r)}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        padding: "2px 8px",
+                        fontSize: 11,
+                        cursor: "pointer",
+                        color: "var(--text-mid)",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {r.status === "פעיל" ? "החזר לטיוטה" : "הפוך לפעיל"}
+                    </button>
+                  </div>
                 </td>
                 <td style={{ padding: "12px 16px" }}>{r.type}</td>
                 <td style={{ padding: "12px 16px" }}>{r.parameters_count}</td>

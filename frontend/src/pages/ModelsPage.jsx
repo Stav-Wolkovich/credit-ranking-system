@@ -28,6 +28,8 @@ const selectStyle = {
   background: "#fff",
 };
 
+const STATUS_TONE = { "טיוטה": "gray", "פעיל": "green" };
+
 export default function ModelsPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -57,6 +59,14 @@ export default function ModelsPage() {
     setDeleteTarget(null);
     api
       .deleteModel(model.id)
+      .then(() => loadModels())
+      .catch((err) => setError(err.message));
+  }
+
+  function toggleStatus(model) {
+    const nextStatus = model.status === "פעיל" ? "טיוטה" : "פעיל";
+    api
+      .updateModelStatus(model.id, { status: nextStatus, tone: STATUS_TONE[nextStatus] })
       .then(() => loadModels())
       .catch((err) => setError(err.message));
   }
@@ -128,7 +138,25 @@ export default function ModelsPage() {
                 </td>
                 <td style={{ padding: "12px 16px" }}>{r.last_updated}</td>
                 <td style={{ padding: "12px 16px" }}>
-                  <Badge label={r.status} tone={r.tone} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Badge label={r.status} tone={r.tone} />
+                    <button
+                      type="button"
+                      onClick={() => toggleStatus(r)}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        padding: "2px 8px",
+                        fontSize: 11,
+                        cursor: "pointer",
+                        color: "var(--text-mid)",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {r.status === "פעיל" ? "החזר לטיוטה" : "הפוך לפעיל"}
+                    </button>
+                  </div>
                 </td>
                 <td style={{ padding: "12px 16px", display: "flex", gap: 10 }}>
                   <button

@@ -27,7 +27,10 @@ export default function ProcessModal({ onCancel, onSaved }) {
   useEffect(() => {
     api.getIssuers().then((res) => setIssuers(res.rows)).catch((err) => setError(err.message));
     api.getAssets().then((res) => setAssets(res.rows)).catch((err) => setError(err.message));
-    api.getModels().then((res) => setModels(res.rows)).catch((err) => setError(err.message));
+    api
+      .getModels()
+      .then((res) => setModels(res.rows.filter((m) => m.status === "פעיל" && m.questionnaires_count > 0)))
+      .catch((err) => setError(err.message));
   }, []);
 
   const frameworkOptions = frameworkKind === "מנפיק" ? issuers : assets;
@@ -270,6 +273,11 @@ export default function ProcessModal({ onCancel, onSaved }) {
               </option>
             ))}
           </select>
+          {models.length === 0 && (
+            <div style={{ fontSize: 11.5, color: "var(--text-light)", marginTop: 4 }}>
+              אין מודלים זמינים ליצירת תהליך — נדרש מודל בסטטוס פעיל עם שאלון אחד לפחות מקושר.
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: 6 }}>

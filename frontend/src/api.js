@@ -87,6 +87,11 @@ export const api = {
       body: JSON.stringify(model),
     }),
   deleteModel: (id) => request(`/models/${id}`, { method: "DELETE" }),
+  updateModelStatus: (id, payload) =>
+    request(`/models/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   getRatingScales: () => request("/rating-scales"),
   getRatingScale: (id) => request(`/rating-scales/${id}`),
   createRatingScale: (scale) =>
@@ -113,6 +118,11 @@ export const api = {
       body: JSON.stringify(questionnaire),
     }),
   deleteQuestionnaire: (id) => request(`/questionnaires/${id}`, { method: "DELETE" }),
+  updateQuestionnaireStatus: (id, payload) =>
+    request(`/questionnaires/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   duplicateQuestionnaire: (id, payload) =>
     request(`/questionnaires/${id}/duplicate`, {
       method: "POST",
