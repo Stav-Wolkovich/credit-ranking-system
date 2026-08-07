@@ -35,6 +35,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(process),
     }),
+  getProcessScoring: (id) => request(`/processes/${id}/scoring`),
+  saveProcessAnswer: (id, payload) =>
+    request(`/processes/${id}/answers`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   getIssuers: () => request("/issuers"),
   createIssuer: (issuer) =>
     request("/issuers", {

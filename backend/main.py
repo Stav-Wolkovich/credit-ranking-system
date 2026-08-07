@@ -352,6 +352,39 @@ def create_process(payload: ProcessCreateInput):
     )
 
 
+@app.get("/api/processes/{process_id}/scoring")
+def get_process_scoring(process_id: str):
+    if not database.get_process(process_id):
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    structure = database.get_process_scoring_structure(process_id)
+    if not structure:
+        raise HTTPException(status_code=422, detail="לתהליך זה אין מודל דירוג משויך")
+    return structure
+
+
+class ProcessAnswerInput(BaseModel):
+    parameter_id: int
+    answer_id: Optional[int] = None
+    numeric_value: Optional[float] = None
+
+
+@app.put("/api/processes/{process_id}/answers")
+def save_process_answer(process_id: str, payload: ProcessAnswerInput):
+    if not database.get_process(process_id):
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if payload.answer_id is None and payload.numeric_value is None:
+        raise HTTPException(status_code=422, detail="יש לספק תשובה או ערך מספרי")
+    database.save_process_answer(
+        process_id,
+        payload.parameter_id,
+        answer_id=payload.answer_id,
+        numeric_value=payload.numeric_value,
+    )
+    result = database.compute_process_score(process_id)
+    database.save_process_computed_result(process_id, result["score"], result["rating"], result["completion"])
+    return result
+
+
 @app.get("/api/issuers")
 def get_issuers():
     """Everything the issuers page needs in one call."""

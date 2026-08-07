@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
 import ProcessModal from "../components/ProcessModal.jsx";
+import ProcessScoringModal from "../components/ProcessScoringModal.jsx";
 import { FilterableTableHead } from "../components/FilterableTh.jsx";
 import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
@@ -11,6 +12,8 @@ const COLUMNS = [
   { key: "code", label: "קוד", accessor: (r) => r.code },
   { key: "framework", label: "מסגרת", accessor: (r) => r.framework },
   { key: "status", label: "סטטוס", accessor: (r) => r.status },
+  { key: "computed_score", label: "ציון מחושב", accessor: (r) => r.computed_score ?? null },
+  { key: "computed_rating", label: "דירוג מחושב", accessor: (r) => r.computed_rating },
   { key: "final_score", label: "ציון סופי", accessor: (r) => r.final_score ?? null },
   { key: "final_rating", label: "דירוג סופי", accessor: (r) => r.final_rating },
   { key: "completion", label: "השלמה", accessor: (r) => `${r.completion}%` },
@@ -22,6 +25,7 @@ export default function ProcessesPage() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [scoringTarget, setScoringTarget] = useState(null);
 
   const loadProcesses = useCallback(() => {
     setLoading(true);
@@ -107,12 +111,16 @@ export default function ProcessesPage() {
                 <td style={{ padding: "12px 16px" }}>
                   <Badge label={r.status} tone={r.tone} />
                 </td>
+                <td style={{ padding: "12px 16px" }}>{r.computed_score ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.computed_rating ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.final_score ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.final_rating ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.completion}%</td>
                 <td style={{ padding: "12px 16px" }}>
                   <button
                     type="button"
+                    onClick={() => setScoringTarget(r)}
+                    aria-label="מילוי שאלונים ודירוג"
                     style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-mid)" }}
                   >
                     ✎
@@ -129,6 +137,16 @@ export default function ProcessesPage() {
           onCancel={() => setModalOpen(false)}
           onSaved={() => {
             setModalOpen(false);
+            loadProcesses();
+          }}
+        />
+      )}
+
+      {scoringTarget && (
+        <ProcessScoringModal
+          process={scoringTarget}
+          onCancel={() => {
+            setScoringTarget(null);
             loadProcesses();
           }}
         />
