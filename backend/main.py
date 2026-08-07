@@ -373,6 +373,32 @@ class ProcessAnswerInput(BaseModel):
     numeric_value: Optional[float] = None
 
 
+class ProcessStatusAction(BaseModel):
+    action: str
+
+
+PROCESS_STATUS_ACTIONS = {
+    "submit": ("בתהליך", "blue"),
+    "self_approve": ("ממתין לוועדה", "amber"),
+    "pause": ("מושהה", "amber"),
+    "cancel": ("בוטל", "red"),
+}
+PROCESS_TERMINAL_STATUSES = {"בוטל", "אושר בוועדה"}
+
+
+@app.post("/api/processes/{process_id}/status-action")
+def apply_process_status_action(process_id: str, payload: ProcessStatusAction):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if payload.action not in PROCESS_STATUS_ACTIONS:
+        raise HTTPException(status_code=422, detail="פעולה לא תקינה")
+    if process["status"] in PROCESS_TERMINAL_STATUSES:
+        raise HTTPException(status_code=409, detail="לא ניתן לשנות סטטוס לתהליך שהושלם או בוטל")
+    status, tone = PROCESS_STATUS_ACTIONS[payload.action]
+    return database.update_process_status(process_id, status, tone)
+
+
 @app.put("/api/processes/{process_id}/answers")
 def save_process_answer(process_id: str, payload: ProcessAnswerInput):
     if not database.get_process(process_id):

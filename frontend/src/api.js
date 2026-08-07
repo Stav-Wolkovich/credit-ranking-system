@@ -41,6 +41,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  applyProcessStatusAction: (id, action) =>
+    request(`/processes/${id}/status-action`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
   getIssuers: () => request("/issuers"),
   createIssuer: (issuer) =>
     request("/issuers", {

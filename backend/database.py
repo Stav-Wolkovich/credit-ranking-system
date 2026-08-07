@@ -88,15 +88,17 @@ process_answers holds what was actually answered for a ranking process
 (process_id, parameter_id, answer_id — for subjective — or
 numeric_value — for objective; UNIQUE per process+parameter, so saving
 again overwrites). compute_process_score() combines a process's answers
-into a result: each questionnaire's parameter scores combine via its own
-calculation_method (ממוצע משוקלל/סכום/מקסימום — unrecognized methods
-like מטריצה fall back to weighted average), then questionnaires combine
-into the final score via a weighted average using their
-model_questionnaires weight. completion% is always returned; a
-score/rating is only returned once every parameter across every
-assigned questionnaire is answered, and get_rating_for_score() maps
-that score onto the model's rating_scale_levels band. The result is
-persisted onto ranking_processes.computed_score/computed_rating/
+into a result: each questionnaire's already-answered parameter scores
+combine via its own calculation_method (ממוצע משוקלל/סכום/מקסימום —
+unrecognized methods like מטריצה fall back to weighted average), then
+questionnaires with at least one answered parameter combine into a
+running score via a weighted average using their model_questionnaires
+weight — so the score updates live as questions are answered rather
+than only once the process is fully complete. completion% and
+`complete` (every parameter across every assigned questionnaire
+answered) are tracked separately from score/rating. get_rating_for_score()
+maps the running score onto the model's rating_scale_levels band. The
+result is persisted onto ranking_processes.computed_score/computed_rating/
 completion — the model's raw output, as distinct from final_score/
 final_rating which represent what a committee actually approved.
 
@@ -1829,12 +1831,28 @@ def get_process_scoring_structure(process_id: str):
                 "parameters": parameters,
             }
         )
+    rating_scale_levels = []
+    rating_scale_name = None
+    if model_row["rating_scale_id"]:
+        scale_row = conn.execute(
+            "SELECT name FROM rating_scales WHERE id = ?", (model_row["rating_scale_id"],)
+        ).fetchone()
+        rating_scale_name = scale_row["name"] if scale_row else None
+        rating_scale_levels = [
+            {"label": lvl["label"], "min_value": lvl["min_value"], "max_value": lvl["max_value"]}
+            for lvl in conn.execute(
+                "SELECT label, min_value, max_value FROM rating_scale_levels WHERE rating_scale_id = ? ORDER BY position ASC",
+                (model_row["rating_scale_id"],),
+            ).fetchall()
+        ]
     conn.close()
     return {
         "process_id": process_id,
         "model_id": model_row["id"],
         "model_name": model_row["name"],
         "rating_scale_id": model_row["rating_scale_id"],
+        "rating_scale_name": rating_scale_name,
+        "rating_scale_levels": rating_scale_levels,
         "questionnaires": questionnaires,
     }
 
@@ -1893,11 +1911,15 @@ def _combine_scores(score_weight_pairs: list[tuple[float, float]], method: str):
 
 
 def compute_process_score(process_id: str):
-    """Computes completion% always, and a final score/rating once every
-    parameter across every questionnaire assigned to the process's model
-    has a saved answer. Each questionnaire's parameter scores combine per
-    its own calculation_method; questionnaires then combine into the final
-    score via a weighted average using their model_questionnaires weight."""
+    """Computes completion% always, plus a running score/rating from
+    whatever parameters are already answered — so the score updates live as
+    the user goes, not only once every question is answered. `complete`
+    still means every parameter across every questionnaire has a saved
+    answer (used to show the final, validated result). Each questionnaire's
+    answered parameter scores combine per its own calculation_method;
+    questionnaires with at least one answered parameter then combine into
+    the running score via a weighted average using their
+    model_questionnaires weight."""
     structure = get_process_scoring_structure(process_id)
     if not structure:
         return None
@@ -1921,7 +1943,7 @@ def compute_process_score(process_id: str):
                 answered_params += 1
                 param_scores.append((score, p["weight"]))
         q_complete = bool(q["parameters"]) and len(param_scores) == len(q["parameters"])
-        q_score = _combine_scores(param_scores, q["calculation_method"]) if q_complete else None
+        q_score = _combine_scores(param_scores, q["calculation_method"]) if param_scores else None
         questionnaire_results.append(
             {"id": q["id"], "name": q["name"], "weight": q["weight"], "score": q_score, "complete": q_complete}
         )
@@ -1931,13 +1953,11 @@ def compute_process_score(process_id: str):
 
     final_score = None
     final_rating = None
-    if complete:
-        scored = [(q["score"], q["weight"]) for q in questionnaire_results if q["score"] is not None]
-        final_score = _combine_scores(scored, "ממוצע משוקלל")
-        if final_score is not None:
-            final_score = round(final_score, 2)
-            if structure["rating_scale_id"]:
-                final_rating = get_rating_for_score(structure["rating_scale_id"], final_score)
+    scored = [(q["score"], q["weight"]) for q in questionnaire_results if q["score"] is not None]
+    if scored:
+        final_score = round(_combine_scores(scored, "ממוצע משוקלל"), 2)
+        if structure["rating_scale_id"]:
+            final_rating = get_rating_for_score(structure["rating_scale_id"], final_score)
 
     return {
         "process_id": process_id,
