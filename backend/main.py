@@ -624,8 +624,13 @@ def _clean_model_input(payload: ModelInput):
     family = payload.family.strip()
     domain = payload.domain.strip()
     owner = payload.owner.strip()
+    rating_scale_id = (payload.rating_scale_id or "").strip()
     if not model_id or not name or not family or not domain or not owner:
         raise HTTPException(status_code=422, detail="כל השדות הם שדות חובה")
+    if not rating_scale_id:
+        raise HTTPException(status_code=422, detail="יש לבחור סולם דירוג")
+    if not database.get_rating_scale(rating_scale_id):
+        raise HTTPException(status_code=422, detail="סולם דירוג לא נמצא")
     questionnaires = [
         {"id": q.id.strip(), "weight": max(0, min(100, q.weight))}
         for q in payload.questionnaires
@@ -639,7 +644,7 @@ def _clean_model_input(payload: ModelInput):
         "owner": owner,
         "description": (payload.description or "").strip() or None,
         "questionnaires": questionnaires,
-        "rating_scale_id": (payload.rating_scale_id or "").strip() or None,
+        "rating_scale_id": rating_scale_id,
     }
 
 

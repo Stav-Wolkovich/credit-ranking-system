@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 
 const DOMAIN_OPTIONS = ["Corporate", "Project Finance", "Real Estate Project"];
-const REQUIRED_FIELDS = ["id", "name", "family", "owner"];
+const REQUIRED_FIELDS = ["id", "name", "family", "owner", "rating_scale_id"];
 
 function StepBadge({ n, active }) {
   return (
@@ -320,20 +320,23 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
             </div>
 
             <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>סולם דירוג</div>
+              <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>סולם דירוג *</div>
+              {fieldErrors.has("rating_scale_id") && (
+                <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ שדה חובה</div>
+              )}
               <select
                 value={form.rating_scale_id}
                 onChange={set("rating_scale_id")}
                 style={{
                   width: "100%",
-                  border: "1px solid var(--border)",
+                  border: `1px solid ${fieldErrors.has("rating_scale_id") ? "#e0a0a0" : "var(--border)"}`,
                   borderRadius: 6,
                   padding: "9px 12px",
                   fontSize: 13,
                   background: "#fff",
                 }}
               >
-                <option value="">–</option>
+                <option value="">בחר סולם דירוג</option>
                 {ratingScales.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
