@@ -127,8 +127,14 @@ completion — the model's raw output, as distinct from final_score/
 final_rating which represent what a committee actually approved.
 
 Users columns are the fields the users page displays: id (username),
-full_name, email, active. user_roles links a user to the roles
-assigned to them (user_id, role_id).
+full_name, email, active, team_id (a teams.id, the user's assigned
+צוות — get_all_users()/get_user() additionally join in team_name).
+user_roles links a user to the roles assigned to them (user_id, role_id).
+ranking_processes.owner (who performed the ranking) doesn't duplicate a
+team_id of its own — get_all_processes()/get_process()/
+get_processes_by_status() derive owner_team_name by joining the owner's
+users.team_id, via _attach_owner_team_names(), so a process always shows
+its owner's current team rather than a frozen copy.
 
 Roles columns are the fields the roles permission-matrix page displays:
 id (AD group code, e.g. RATING_ADMIN), name (Hebrew display name),
@@ -1260,10 +1266,14 @@ def init_db():
             id TEXT PRIMARY KEY,
             full_name TEXT NOT NULL,
             email TEXT,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            team_id TEXT REFERENCES teams(id)
         )
         """
     )
+    user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "team_id" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN team_id TEXT REFERENCES teams(id)")
     user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if user_count == 0:
         conn.executemany(
@@ -1655,11 +1665,27 @@ def count_rankings_expiring_within(days: int = 60):
     return count
 
 
+def _attach_owner_team_names(conn, processes):
+    """Derives each process's team from its owner's team assignment
+    (users.team_id) — ranking_processes doesn't store a team itself, but
+    the owner (אחראי תהליך) is who performed the ranking, so their team is
+    shown as the process's team."""
+    owner_team_by_user = {
+        row["id"]: row["team_id"] for row in conn.execute("SELECT id, team_id FROM users").fetchall()
+    }
+    team_names_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM teams").fetchall()}
+    for p in processes:
+        owner_team_id = owner_team_by_user.get(p.get("owner"))
+        p["owner_team_name"] = team_names_by_id.get(owner_team_id)
+    return processes
+
+
 def get_all_processes():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM ranking_processes ORDER BY id DESC").fetchall()]
     _attach_issuer_display_names(conn, rows)
     _attach_owner_names(conn, rows)
+    _attach_owner_team_names(conn, rows)
     conn.close()
     return rows
 
@@ -1680,6 +1706,7 @@ def get_process(process_id: str):
     process = dict(row)
     _attach_issuer_display_names(conn, [process])
     _attach_owner_names(conn, [process])
+    _attach_owner_team_names(conn, [process])
     conn.close()
     return process
 
@@ -1715,6 +1742,9 @@ def get_processes_by_status(status: str):
     _attach_issuer_display_names(conn, rows)
     _attach_process_context(conn, rows)
     _attach_owner_names(conn, rows)
+    _attach_owner_team_names(conn, rows)
+    for p in rows:
+        p["team"] = p["team"] or p["owner_team_name"]
     conn.close()
     return rows
 
@@ -3008,10 +3038,18 @@ def _attach_user_roles(conn, users):
     return users
 
 
+def _attach_user_team_names(conn, users):
+    names_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM teams").fetchall()}
+    for user in users:
+        user["team_name"] = names_by_id.get(user["team_id"])
+    return users
+
+
 def get_all_users():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM users ORDER BY rowid ASC").fetchall()]
     _attach_user_roles(conn, rows)
+    _attach_user_team_names(conn, rows)
     conn.close()
     for row in rows:
         row["active"] = bool(row["active"])
@@ -3026,6 +3064,7 @@ def get_user(user_id: str):
         return None
     user = dict(row)
     _attach_user_roles(conn, [user])
+    _attach_user_team_names(conn, [user])
     conn.close()
     user["active"] = bool(user["active"])
     return user
@@ -3059,11 +3098,13 @@ def _replace_user_roles(conn, user_id: str, role_ids: list[str]):
         )
 
 
-def create_user(id: str, full_name: str, email: str | None, role_ids: list[str] | None = None):
+def create_user(
+    id: str, full_name: str, email: str | None, role_ids: list[str] | None = None, team_id: str | None = None
+):
     conn = get_connection()
     conn.execute(
-        "INSERT INTO users (id, full_name, email, active) VALUES (?, ?, ?, 1)",
-        (id, full_name, email),
+        "INSERT INTO users (id, full_name, email, active, team_id) VALUES (?, ?, ?, 1, ?)",
+        (id, full_name, email, team_id),
     )
     _replace_user_roles(conn, id, role_ids or [])
     conn.commit()
@@ -3072,12 +3113,17 @@ def create_user(id: str, full_name: str, email: str | None, role_ids: list[str] 
 
 
 def update_user(
-    original_id: str, id: str, full_name: str, email: str | None, role_ids: list[str] | None = None
+    original_id: str,
+    id: str,
+    full_name: str,
+    email: str | None,
+    role_ids: list[str] | None = None,
+    team_id: str | None = None,
 ):
     conn = get_connection()
     conn.execute(
-        "UPDATE users SET id = ?, full_name = ?, email = ? WHERE id = ?",
-        (id, full_name, email, original_id),
+        "UPDATE users SET id = ?, full_name = ?, email = ?, team_id = ? WHERE id = ?",
+        (id, full_name, email, team_id, original_id),
     )
     if original_id != id:
         conn.execute("UPDATE user_roles SET user_id = ? WHERE user_id = ?", (id, original_id))

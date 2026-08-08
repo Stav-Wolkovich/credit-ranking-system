@@ -13,6 +13,7 @@ const COLUMNS = [
   { key: "framework", label: "מסגרת", accessor: (r) => r.framework },
   { key: "status", label: "סטטוס", accessor: (r) => r.status },
   { key: "owner_name", label: "אחראי תהליך", accessor: (r) => r.owner_name },
+  { key: "owner_team_name", label: "צוות", accessor: (r) => r.owner_team_name },
   { key: "computed_score", label: "ציון מחושב", accessor: (r) => r.computed_score ?? null },
   { key: "computed_rating", label: "דירוג מחושב", accessor: (r) => r.computed_rating },
   { key: "final_score", label: "ציון סופי", accessor: (r) => r.final_score ?? null },
@@ -113,6 +114,7 @@ export default function ProcessesPage() {
                   <Badge label={r.status} tone={r.tone} />
                 </td>
                 <td style={{ padding: "12px 16px" }}>{r.owner_name ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.owner_team_name ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.computed_score ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.computed_rating ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.final_score ?? "-"}</td>

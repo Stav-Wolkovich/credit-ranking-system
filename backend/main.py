@@ -171,6 +171,7 @@ class UserInput(BaseModel):
     full_name: str
     email: Optional[str] = None
     role_ids: List[str] = []
+    team_id: Optional[str] = None
 
 
 class MatrixInput(BaseModel):
@@ -935,11 +936,15 @@ def _clean_user_input(payload: UserInput):
     full_name = payload.full_name.strip()
     if not user_id or not full_name:
         raise HTTPException(status_code=422, detail="שם משתמש ושם מלא הם שדות חובה")
+    team_id = (payload.team_id or "").strip() or None
+    if team_id and not database.get_team(team_id):
+        raise HTTPException(status_code=422, detail="צוות לא נמצא")
     return {
         "id": user_id,
         "full_name": full_name,
         "email": (payload.email or "").strip() or None,
         "role_ids": payload.role_ids,
+        "team_id": team_id,
     }
 
 
