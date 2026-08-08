@@ -9,6 +9,7 @@ const COLUMNS = [
   { key: "status", label: "סטטוס", accessor: (r) => r.status },
   { key: "model", label: "מודל", accessor: (r) => r.model },
   { key: "team", label: "צוות", accessor: (r) => r.team },
+  { key: "owner_name", label: "אחראי תהליך", accessor: (r) => r.owner_name },
   { key: "computed_score", label: "ציון מחושב", accessor: (r) => r.computed_score ?? null },
   { key: "computed_rating", label: "דירוג מחושב", accessor: (r) => r.computed_rating },
   { key: "framework", label: "מסגרת", accessor: (r) => r.framework },
@@ -117,6 +118,7 @@ export default function ApprovalsPage() {
                 </td>
                 <td style={{ padding: "12px 16px" }}>{r.model ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.team ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.owner_name ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.computed_score ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.computed_rating ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.framework ?? "-"}</td>

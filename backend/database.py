@@ -46,6 +46,16 @@ activate_process() also updates the matching rankings row (status,
 tone, approval_date = today) so the report page's valid_from/valid_until
 (approval_date + 1 year, see get_all_rankings()) and expiring-soon
 tracking start immediately, since both rows represent the same תהליך.
+At either stage the reviewer can instead reject with a required comment
+(saved to rejection_comment) — reject_manager_process() sends it back to
+"הוחזר" (leaving the manager queue) and reject_committee_process() to
+"נדחה בועדה" (leaving the committee queue, recording its own
+final_rating instead of the model's computed_rating). Both email the
+process's owner (ranking_processes.owner, a users.id set at creation)
+directly via _email_process_owner(), reusing the RATING_RETURNED
+notification type's channels but targeting that specific person instead
+of the type's shared configured address. Neither status is terminal —
+הגשה לאישور from the scoring modal resubmits either back to בתהליך.
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active.
@@ -773,7 +783,9 @@ def init_db():
             final_rating TEXT,
             computed_score REAL,
             computed_rating TEXT,
-            completion INTEGER NOT NULL DEFAULT 0
+            completion INTEGER NOT NULL DEFAULT 0,
+            owner TEXT REFERENCES users(id),
+            rejection_comment TEXT
         )
         """
     )
@@ -803,6 +815,10 @@ def init_db():
         conn.execute("ALTER TABLE ranking_processes ADD COLUMN framework_issuer_id TEXT")
     if "framework_asset_id" not in process_columns:
         conn.execute("ALTER TABLE ranking_processes ADD COLUMN framework_asset_id TEXT")
+    if "owner" not in process_columns:
+        conn.execute("ALTER TABLE ranking_processes ADD COLUMN owner TEXT REFERENCES users(id)")
+    if "rejection_comment" not in process_columns:
+        conn.execute("ALTER TABLE ranking_processes ADD COLUMN rejection_comment TEXT")
     process_count = conn.execute("SELECT COUNT(*) FROM ranking_processes").fetchone()[0]
     if process_count == 0:
         conn.executemany(
@@ -1629,6 +1645,7 @@ def get_all_processes():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM ranking_processes ORDER BY id DESC").fetchall()]
     _attach_issuer_display_names(conn, rows)
+    _attach_owner_names(conn, rows)
     conn.close()
     return rows
 
@@ -1648,6 +1665,7 @@ def get_process(process_id: str):
         return None
     process = dict(row)
     _attach_issuer_display_names(conn, [process])
+    _attach_owner_names(conn, [process])
     conn.close()
     return process
 
@@ -1682,6 +1700,7 @@ def get_processes_by_status(status: str):
     ]
     _attach_issuer_display_names(conn, rows)
     _attach_process_context(conn, rows)
+    _attach_owner_names(conn, rows)
     conn.close()
     return rows
 
@@ -1732,20 +1751,60 @@ def activate_process(process_id: str):
     return get_process(process_id)
 
 
-def reject_committee_process(process_id: str, final_rating: str):
+def _email_process_owner(process_id: str, message: str):
+    """Emails the process's owner (אחראי תהליך) directly, reusing the
+    RATING_RETURNED notification type for its email/internal channels —
+    override_email targets that specific person rather than the type's
+    shared configured address. No-ops (logs 'not_configured') if the
+    process has no owner or the owner has no email on file."""
+    process = get_process(process_id)
+    owner_email = None
+    if process and process.get("owner"):
+        owner = get_user(process["owner"])
+        owner_email = owner["email"] if owner else None
+    _create_notification("RATING_RETURNED", process_id, message, override_email=owner_email)
+
+
+def reject_committee_process(process_id: str, final_rating: str, comment: str):
     """The ועדה can reject the model's computed rating and record its own
     final_rating instead — computed_rating stays untouched so both are
     visible side by side (the processes/approvals pages already show
     ציון/דירוג מחושב and ציון/דירוג סופי as separate columns). The process
-    leaves the committee queue: status moves to "נדחה בועדה"."""
+    leaves the committee queue: status moves to "נדחה בועדה", and the
+    comment explaining the change is saved and emailed to the owner."""
     conn = get_connection()
     conn.execute(
-        "UPDATE ranking_processes SET final_rating = ?, status = ?, tone = ? WHERE id = ?",
-        (final_rating, "נדחה בועדה", "red", process_id),
+        "UPDATE ranking_processes SET final_rating = ?, status = ?, tone = ?, rejection_comment = ? WHERE id = ?",
+        (final_rating, "נדחה בועדה", "red", comment, process_id),
     )
     conn.commit()
     conn.close()
-    return get_process(process_id)
+    process = get_process(process_id)
+    _email_process_owner(
+        process_id,
+        f"התהליך {process_id} ({process['code']}) נדחה על ידי הוועדה. דירוג סופי חדש: {final_rating}. הערה: {comment}",
+    )
+    return process
+
+
+def reject_manager_process(process_id: str, comment: str):
+    """A manager can return a submitted process to the analyst with
+    feedback instead of approving it: status moves to "הוחזר" (leaving the
+    manager queue, which only shows בתהליך), the comment is saved, and the
+    owner is emailed directly so they know the rating needs revision."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET status = ?, tone = ?, rejection_comment = ? WHERE id = ?",
+        ("הוחזר", "amber", comment, process_id),
+    )
+    conn.commit()
+    conn.close()
+    process = get_process(process_id)
+    _email_process_owner(
+        process_id,
+        f"התהליך {process_id} ({process['code']}) הוחזר על ידי מנהל לתיקון. הערה: {comment}",
+    )
+    return process
 
 
 def _next_process_id():
@@ -1766,12 +1825,15 @@ def create_ranking_process(
     framework_issuer_id: str | None,
     framework_asset_id: str | None,
     data_date: str | None,
+    owner: str,
 ):
     """Creates a new תהליך דירוג: a rankings row (for the report page) and a
     matching ranking_processes row (for the processes page), sharing the same
     generated id. subject_issuer_id always mirrors the resolved
     framework_issuer_id — when the framework is an asset, that's the asset's
-    own issuer_id, so the ranked entity is still the issuer that owns it."""
+    own issuer_id, so the ranked entity is still the issuer that owns it.
+    owner (a users.id) is the אחראי תהליך — who gets emailed if a manager
+    later returns the process with a comment (see reject_manager_process())."""
     conn = get_connection()
     if kind == "נכס":
         asset = conn.execute("SELECT issuer_id FROM assets WHERE id = ?", (framework_asset_id,)).fetchone()
@@ -1793,10 +1855,10 @@ def create_ranking_process(
         """
         INSERT INTO ranking_processes
             (id, subject_issuer_id, code, framework_issuer_id, framework_asset_id, status, tone,
-             final_score, final_rating, computed_score, computed_rating, completion)
-        VALUES (?, ?, '-', ?, ?, 'טיוטה', 'gray', NULL, NULL, NULL, NULL, 0)
+             final_score, final_rating, computed_score, computed_rating, completion, owner)
+        VALUES (?, ?, '-', ?, ?, 'טיוטה', 'gray', NULL, NULL, NULL, NULL, 0, ?)
         """,
-        (new_id, resolved_issuer_id, resolved_issuer_id, framework_asset_id),
+        (new_id, resolved_issuer_id, resolved_issuer_id, framework_asset_id, owner),
     )
     conn.commit()
     conn.close()
@@ -3461,10 +3523,13 @@ def update_notification_type_email(type_id: str, notification_email: str | None)
     return get_notification_type(type_id)
 
 
-def _create_notification(type_id: str, entity_id: str | None, message: str):
+def _create_notification(type_id: str, entity_id: str | None, message: str, override_email: str | None = None):
     """Logs a real notification event to the יומן ביקורת, and — for types
     whose channel includes email and that have a notification_email
     configured — actually sends it via SMTP (see email_sender.py).
+    override_email sends to a specific person (e.g. a process's owner)
+    instead of the type's shared/configured address — used when the
+    notification is about one person's record rather than a broadcast.
     email_status records what really happened: 'sent', 'failed' (with
     email_error set), or 'not_configured' (email channel wanted but no
     address set, or no SMTP_* env vars configured)."""
@@ -3474,7 +3539,7 @@ def _create_notification(type_id: str, entity_id: str | None, message: str):
     email_status = None
     email_error = None
     if ntype and "email" in (ntype["channels"] or "").split(","):
-        email_to = ntype["notification_email"]
+        email_to = override_email or ntype["notification_email"]
         if email_to:
             sent, email_status, email_error = email_sender.send_email(
                 email_to, f"התראה: {ntype['name']}", message

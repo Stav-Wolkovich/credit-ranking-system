@@ -273,6 +273,22 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                 )}
               </div>
 
+              {process.rejection_comment && (
+                <div
+                  style={{
+                    border: "1px solid #f3c9c9",
+                    background: "#fbe9e9",
+                    borderRadius: 8,
+                    padding: "10px 14px",
+                  }}
+                >
+                  <div style={{ fontSize: 11.5, color: "#b52d2d", fontWeight: 700, marginBottom: 4 }}>
+                    {process.status === "הוחזר" ? "הערת החזרה ממנהל" : "הערת דחייה מוועדה"}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: "var(--text-dark)" }}>{process.rejection_comment}</div>
+                </div>
+              )}
+
               {process.final_rating && (
                 <div
                   style={{

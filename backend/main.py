@@ -284,6 +284,23 @@ def approve_manager(process_id: str):
     return database.update_process_status(process_id, "ממתין לוועדה", "amber")
 
 
+class RejectManagerInput(BaseModel):
+    comment: str
+
+
+@app.post("/api/approvals/{process_id}/reject-manager")
+def reject_manager(process_id: str, payload: RejectManagerInput):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "בתהליך":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור מנהל")
+    comment = payload.comment.strip()
+    if not comment:
+        raise HTTPException(status_code=422, detail="יש להזין הערה")
+    return database.reject_manager_process(process_id, comment)
+
+
 @app.post("/api/approvals/{process_id}/approve-committee")
 def approve_committee(process_id: str):
     process = database.get_process(process_id)
@@ -296,6 +313,7 @@ def approve_committee(process_id: str):
 
 class RejectCommitteeInput(BaseModel):
     final_rating: str
+    comment: str
 
 
 @app.post("/api/approvals/{process_id}/reject-committee")
@@ -308,12 +326,15 @@ def reject_committee(process_id: str, payload: RejectCommitteeInput):
     final_rating = payload.final_rating.strip()
     if not final_rating:
         raise HTTPException(status_code=422, detail="יש לבחור דירוג")
+    comment = payload.comment.strip()
+    if not comment:
+        raise HTTPException(status_code=422, detail="יש להזין הערה")
     model_id = database.get_process_model_id(process_id)
     structure = database.get_process_scoring_structure(process_id) if model_id else None
     valid_labels = {lvl["label"] for lvl in (structure["rating_scale_levels"] if structure else [])}
     if valid_labels and final_rating not in valid_labels:
         raise HTTPException(status_code=422, detail="הדירוג שנבחר אינו חלק מסולם הדירוג של המודל")
-    return database.reject_committee_process(process_id, final_rating)
+    return database.reject_committee_process(process_id, final_rating, comment)
 
 
 @app.get("/api/report/rows/{process_id}")
@@ -348,6 +369,7 @@ class ProcessCreateInput(BaseModel):
     framework_issuer_id: Optional[str] = None
     framework_asset_id: Optional[str] = None
     data_date: Optional[str] = None
+    owner: str
 
 
 @app.post("/api/processes", status_code=201)
@@ -361,6 +383,8 @@ def create_process(payload: ProcessCreateInput):
         raise HTTPException(status_code=422, detail="ניתן לבחור רק מודל בסטטוס פעיל")
     if model["questionnaires_count"] < 1:
         raise HTTPException(status_code=422, detail="למודל הנבחר אין שאלונים מקושרים")
+    if not payload.owner.strip() or not database.get_user(payload.owner):
+        raise HTTPException(status_code=422, detail="יש לבחור אחראי תהליך קיים")
     if payload.kind == "מנפיק":
         if not payload.framework_issuer_id or not database.get_issuer(payload.framework_issuer_id):
             raise HTTPException(status_code=422, detail="יש לבחור מנפיק קיים")
@@ -376,6 +400,7 @@ def create_process(payload: ProcessCreateInput):
         framework_issuer_id=payload.framework_issuer_id,
         framework_asset_id=framework_asset_id,
         data_date=payload.data_date,
+        owner=payload.owner.strip(),
     )
 
 

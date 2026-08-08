@@ -19,6 +19,8 @@ export default function ProcessModal({ onCancel, onSaved }) {
   const [assets, setAssets] = useState([]);
   const [models, setModels] = useState([]);
   const [modelId, setModelId] = useState("");
+  const [users, setUsers] = useState([]);
+  const [ownerId, setOwnerId] = useState("");
   const [dataDate, setDataDate] = useState(todayIso());
   const [fieldErrors, setFieldErrors] = useState(new Set());
   const [error, setError] = useState(null);
@@ -31,6 +33,7 @@ export default function ProcessModal({ onCancel, onSaved }) {
       .getModels()
       .then((res) => setModels(res.rows.filter((m) => m.status === "פעיל" && m.questionnaires_count > 0)))
       .catch((err) => setError(err.message));
+    api.getUsers().then((res) => setUsers(res.rows)).catch((err) => setError(err.message));
   }, []);
 
   const frameworkOptions = frameworkKind === "מנפיק" ? issuers : assets;
@@ -65,6 +68,7 @@ export default function ProcessModal({ onCancel, onSaved }) {
     const missing = new Set();
     if (!frameworkSelected) missing.add("framework");
     if (!modelId) missing.add("model");
+    if (!ownerId) missing.add("owner");
     setFieldErrors(missing);
     return missing.size === 0;
   }
@@ -79,6 +83,7 @@ export default function ProcessModal({ onCancel, onSaved }) {
       framework_issuer_id: frameworkKind === "מנפיק" ? frameworkSelected.id : null,
       framework_asset_id: frameworkKind === "נכס" ? frameworkSelected.id : null,
       data_date: dataDate || null,
+      owner: ownerId,
     };
     try {
       const saved = await api.createProcess(payload);
@@ -278,6 +283,32 @@ export default function ProcessModal({ onCancel, onSaved }) {
               אין מודלים זמינים ליצירת תהליך — נדרש מודל בסטטוס פעיל עם שאלון אחד לפחות מקושר.
             </div>
           )}
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>אחראי תהליך *</div>
+          {fieldErrors.has("owner") && (
+            <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ שדה חובה</div>
+          )}
+          <select
+            value={ownerId}
+            onChange={(e) => setOwnerId(e.target.value)}
+            style={{
+              width: "100%",
+              border: `1px solid ${fieldErrors.has("owner") ? "#e0a0a0" : "var(--border)"}`,
+              borderRadius: 6,
+              padding: "9px 12px",
+              fontSize: 13,
+              background: "#fff",
+            }}
+          >
+            <option value="">בחר אחראי תהליך</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.full_name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div style={{ marginBottom: 6 }}>
