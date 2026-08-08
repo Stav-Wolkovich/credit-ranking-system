@@ -135,9 +135,10 @@ export default function ProcessesPage() {
       {modalOpen && (
         <ProcessModal
           onCancel={() => setModalOpen(false)}
-          onSaved={() => {
+          onSaved={(saved) => {
             setModalOpen(false);
             loadProcesses();
+            setScoringTarget(saved);
           }}
         />
       )}
