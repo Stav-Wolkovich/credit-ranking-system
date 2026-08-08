@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { Badge, ConfirmDialog } from "./ui.jsx";
 
-const PROCESS_TERMINAL_STATUSES = new Set(["בוטל", "אושר בוועדה"]);
+const PROCESS_TERMINAL_STATUSES = new Set(["בוטל", "אושר בוועדה", "בתוקף"]);
 
 function countAnswered(questionnaires) {
   let total = 0;

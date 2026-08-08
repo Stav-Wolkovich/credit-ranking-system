@@ -40,7 +40,12 @@ rankings row via _attach_process_context() for display.
 The תור אישורים (approvals queue) page is a two-stage workflow over
 ranking_processes.status: "בתהליך" (awaiting manager review) →
 approve_manager moves it to "ממתין לוועדה" (awaiting committee review) →
-approve_committee moves it to "אושר בוועדה" (final).
+approve_committee moves it straight to "בתוקף" (final — see
+activate_process()), skipping an intermediate "approved" resting state.
+activate_process() also updates the matching rankings row (status,
+tone, approval_date = today) so the report page's valid_from/valid_until
+(approval_date + 1 year, see get_all_rankings()) and expiring-soon
+tracking start immediately, since both rows represent the same תהליך.
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active.
@@ -1712,6 +1717,27 @@ def update_process_status(process_id: str, status: str, tone: str):
             f"התהליך {process_id} ({process['code']}) אושר על ידי מנהל וממתין כעת לאישור ועדה",
         )
     return process
+
+
+def activate_process(process_id: str):
+    """Committee approval skips an intermediate "approved" resting state and
+    activates the ranking directly: ranking_processes moves to בתוקף, and so
+    does its matching rankings row, with approval_date stamped to today so
+    the report page's 1-year validity window (get_all_rankings()) and
+    expiring-soon tracking apply immediately."""
+    today = date.today().isoformat()
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET status = ?, tone = ? WHERE id = ?",
+        ("בתוקף", "green", process_id),
+    )
+    conn.execute(
+        "UPDATE rankings SET status = ?, tone = ?, approval_date = ? WHERE id = ?",
+        ("בתוקף", "green", today, process_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_process(process_id)
 
 
 def reject_committee_process(process_id: str, final_rating: str):

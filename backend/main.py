@@ -291,7 +291,7 @@ def approve_committee(process_id: str):
         raise HTTPException(status_code=404, detail="תהליך לא נמצא")
     if process["status"] != "ממתין לוועדה":
         raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור ועדה")
-    return database.update_process_status(process_id, "אושר בוועדה", "green")
+    return database.activate_process(process_id)
 
 
 class RejectCommitteeInput(BaseModel):
@@ -405,7 +405,7 @@ PROCESS_STATUS_ACTIONS = {
     "pause": ("מושהה", "amber"),
     "cancel": ("בוטל", "red"),
 }
-PROCESS_TERMINAL_STATUSES = {"בוטל", "אושר בוועדה"}
+PROCESS_TERMINAL_STATUSES = {"בוטל", "אושר בוועדה", "בתוקף"}
 
 
 @app.post("/api/processes/{process_id}/status-action")
