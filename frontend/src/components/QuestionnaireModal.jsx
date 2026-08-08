@@ -31,7 +31,7 @@ function Field({ label, required, invalid, disabled, value, onChange }) {
   );
 }
 
-function ParameterEditor({ parameter, onChange, onRemove }) {
+function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemove }) {
   const [expanded, setExpanded] = useState(false);
 
   function set(field, value) {
@@ -119,6 +119,34 @@ function ParameterEditor({ parameter, onChange, onRemove }) {
               ))}
             </select>
           </div>
+
+          {parameter.type === "מטריצה" && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 4 }}>מטריצה *</div>
+              {matrixInvalid && (
+                <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ יש לבחור מטריצה</div>
+              )}
+              <select
+                value={parameter.matrix_id ?? ""}
+                onChange={(e) => set("matrix_id", e.target.value || null)}
+                style={{
+                  width: "100%",
+                  border: `1px solid ${matrixInvalid ? "#e0a0a0" : "var(--border)"}`,
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  fontSize: 13,
+                  background: "#fff",
+                }}
+              >
+                <option value="">בחר מטריצה</option>
+                {matrices.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} ({m.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 4 }}>משקל (%)</div>
@@ -213,10 +241,19 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
     description: initial?.description ?? "",
   });
   const [parameters, setParameters] = useState([]);
+  const [matrices, setMatrices] = useState([]);
   const [loading, setLoading] = useState(mode === "edit");
   const [fieldErrors, setFieldErrors] = useState(new Set());
+  const [matrixErrors, setMatrixErrors] = useState(new Set());
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api
+      .getMatrices()
+      .then((res) => setMatrices(res.rows.filter((m) => m.type === "רשת 2D")))
+      .catch((err) => setError(err.message));
+  }, []);
 
   useEffect(() => {
     if (mode === "edit" && initial?.id) {
@@ -241,7 +278,7 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
   const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
 
   function addParameter() {
-    setParameters((prev) => [...prev, { name: "", type: "סובייקטיבי", weight: 0, answers: [] }]);
+    setParameters((prev) => [...prev, { name: "", type: "סובייקטיבי", weight: 0, answers: [], matrix_id: null }]);
   }
 
   function updateParameter(index, next) {
@@ -257,7 +294,11 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
     if (!form.id.trim()) missing.add("id");
     if (!form.name.trim()) missing.add("name");
     setFieldErrors(missing);
-    return missing.size === 0;
+    const missingMatrix = new Set(
+      parameters.map((p, i) => (p.type === "מטריצה" && !p.matrix_id ? i : null)).filter((i) => i !== null)
+    );
+    setMatrixErrors(missingMatrix);
+    return missing.size === 0 && missingMatrix.size === 0;
   }
 
   async function handleSave() {
@@ -274,6 +315,7 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
         type: p.type,
         weight: Number(p.weight) || 0,
         answers: p.answers.map((a) => a.trim()).filter(Boolean),
+        matrix_id: p.type === "מטריצה" ? p.matrix_id || null : null,
       })),
     };
     try {
@@ -402,6 +444,8 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
               <ParameterEditor
                 key={i}
                 parameter={p}
+                matrices={matrices}
+                matrixInvalid={matrixErrors.has(i)}
                 onChange={(next) => updateParameter(i, next)}
                 onRemove={() => removeParameter(i)}
               />

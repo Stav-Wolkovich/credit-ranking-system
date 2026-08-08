@@ -136,6 +136,7 @@ class ParameterInput(BaseModel):
     type: str
     weight: int = 0
     answers: List[str] = []
+    matrix_id: Optional[str] = None
 
 
 class QuestionnaireInput(BaseModel):
@@ -418,6 +419,8 @@ class ProcessAnswerInput(BaseModel):
     parameter_id: int
     answer_id: Optional[int] = None
     numeric_value: Optional[float] = None
+    matrix_x: Optional[str] = None
+    matrix_y: Optional[str] = None
 
 
 class ProcessStatusAction(BaseModel):
@@ -450,13 +453,16 @@ def apply_process_status_action(process_id: str, payload: ProcessStatusAction):
 def save_process_answer(process_id: str, payload: ProcessAnswerInput):
     if not database.get_process(process_id):
         raise HTTPException(status_code=404, detail="תהליך לא נמצא")
-    if payload.answer_id is None and payload.numeric_value is None:
-        raise HTTPException(status_code=422, detail="יש לספק תשובה או ערך מספרי")
+    has_matrix_pair = payload.matrix_x is not None and payload.matrix_y is not None
+    if payload.answer_id is None and payload.numeric_value is None and not has_matrix_pair:
+        raise HTTPException(status_code=422, detail="יש לספק תשובה, ערך מספרי, או ערכי ציר X/Y")
     database.save_process_answer(
         process_id,
         payload.parameter_id,
         answer_id=payload.answer_id,
         numeric_value=payload.numeric_value,
+        matrix_x=payload.matrix_x,
+        matrix_y=payload.matrix_y,
     )
     result = database.compute_process_score(process_id)
     database.save_process_computed_result(process_id, result["score"], result["rating"], result["completion"])
@@ -777,15 +783,23 @@ def _clean_questionnaire_input(payload: QuestionnaireInput):
     name = payload.name.strip()
     if not questionnaire_id or not name:
         raise HTTPException(status_code=422, detail="קוד שאלון ושם שאלון הם שדות חובה")
-    parameters = [
-        {
-            "name": p.name.strip(),
-            "type": p.type,
-            "weight": p.weight,
-            "answers": [a.strip() for a in p.answers if a.strip()],
-        }
-        for p in payload.parameters
-    ]
+    parameters = []
+    for p in payload.parameters:
+        matrix_id = (p.matrix_id or "").strip() or None
+        if p.type == "מטריצה":
+            if not matrix_id:
+                raise HTTPException(status_code=422, detail=f"יש לבחור מטריצה עבור הפרמטר '{p.name.strip()}'")
+            if not database.get_matrix(matrix_id):
+                raise HTTPException(status_code=422, detail="המטריצה שנבחרה לא נמצאה")
+        parameters.append(
+            {
+                "name": p.name.strip(),
+                "type": p.type,
+                "weight": p.weight,
+                "answers": [a.strip() for a in p.answers if a.strip()],
+                "matrix_id": matrix_id,
+            }
+        )
     return {
         "id": questionnaire_id,
         "name": name,

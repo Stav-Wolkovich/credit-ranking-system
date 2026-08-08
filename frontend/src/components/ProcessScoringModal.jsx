@@ -4,25 +4,47 @@ import { Badge, ConfirmDialog } from "./ui.jsx";
 
 const PROCESS_TERMINAL_STATUSES = new Set(["בוטל", "אושר בוועדה", "בתוקף"]);
 
+function isParameterAnswered(p) {
+  const a = p.current_answer;
+  if (!a) return false;
+  if (p.type === "מטריצה") return a.matrix_x != null && a.matrix_y != null;
+  return a.answer_id != null || a.numeric_value != null;
+}
+
 function countAnswered(questionnaires) {
   let total = 0;
   let answered = 0;
   questionnaires.forEach((q) => {
     q.parameters.forEach((p) => {
       total += 1;
-      if (p.current_answer && (p.current_answer.answer_id != null || p.current_answer.numeric_value != null)) {
-        answered += 1;
-      }
+      if (isParameterAnswered(p)) answered += 1;
     });
   });
   return { total, answered };
 }
 
+function matrixCellScore(matrix, x, y) {
+  if (!matrix || !matrix.cell_values || x == null || y == null) return null;
+  const xIndex = matrix.x_values.indexOf(x);
+  const yIndex = matrix.y_values.indexOf(y);
+  if (xIndex === -1 || yIndex === -1) return null;
+  return matrix.cell_values[yIndex]?.[xIndex] ?? null;
+}
+
 function ParameterField({ parameter, onAnswer, saving }) {
   const isSubjective = parameter.type === "סובייקטיבי";
+  const isMatrix = parameter.type === "מטריצה";
   const [numericDraft, setNumericDraft] = useState(
     parameter.current_answer?.numeric_value ?? ""
   );
+  const [matrixX, setMatrixX] = useState(parameter.current_answer?.matrix_x ?? "");
+  const [matrixY, setMatrixY] = useState(parameter.current_answer?.matrix_y ?? "");
+
+  function handleMatrixChange(nextX, nextY) {
+    setMatrixX(nextX);
+    setMatrixY(nextY);
+    if (nextX && nextY) onAnswer({ matrix_x: nextX, matrix_y: nextY });
+  }
 
   return (
     <div style={{ borderTop: "1px solid var(--border)", padding: "12px 0" }}>
@@ -60,6 +82,56 @@ function ParameterField({ parameter, onAnswer, saving }) {
               </span>
             </label>
           ))}
+        </div>
+      ) : isMatrix ? (
+        <div>
+          {!parameter.matrix ? (
+            <div style={{ fontSize: 12.5, color: "var(--text-light)" }}>למטריצה של פרמטר זה אין רשת ערכים.</div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-light)", marginBottom: 3 }}>
+                  {parameter.matrix.x_axis_label || "ציר X"}
+                </div>
+                <select
+                  value={matrixX}
+                  disabled={saving}
+                  onChange={(e) => handleMatrixChange(e.target.value, matrixY)}
+                  style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#fff" }}
+                >
+                  <option value="">בחר ערך</option>
+                  {parameter.matrix.x_values.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-light)", marginBottom: 3 }}>
+                  {parameter.matrix.y_axis_label || "ציר Y"}
+                </div>
+                <select
+                  value={matrixY}
+                  disabled={saving}
+                  onChange={(e) => handleMatrixChange(matrixX, e.target.value)}
+                  style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#fff" }}
+                >
+                  <option value="">בחר ערך</option>
+                  {parameter.matrix.y_values.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {matrixX && matrixY && (
+                <span style={{ fontSize: 12.5, color: "var(--text-mid)" }} dir="ltr">
+                  ציון: {matrixCellScore(parameter.matrix, matrixX, matrixY) ?? "-"}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

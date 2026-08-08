@@ -105,9 +105,13 @@ answered by picking one of these; objective (אובייקטיבי) parameters
 have no answer options and take a direct numeric score instead.
 
 process_answers holds what was actually answered for a ranking process
-(process_id, parameter_id, answer_id — for subjective — or
-numeric_value — for objective; UNIQUE per process+parameter, so saving
-again overwrites). compute_process_score() combines a process's answers
+(process_id, parameter_id, answer_id — for subjective — numeric_value —
+for objective — or matrix_x/matrix_y — for מטריצה, the two axis labels
+picked; UNIQUE per process+parameter, so saving again overwrites). A
+questionnaire_parameters row of type מטריצה links to a matrices row via
+matrix_id; its score is looked up from that matrix's grid at the
+matrix_x/matrix_y intersection (see _matrix_cell_score()) rather than
+being entered directly. compute_process_score() combines a process's answers
 into a result: each questionnaire's already-answered parameter scores
 combine via its own calculation_method (ממוצע משוקלל/סכום/מקסימום —
 unrecognized methods like מטריצה fall back to weighted average), then
@@ -1097,10 +1101,14 @@ def init_db():
             name TEXT NOT NULL,
             type TEXT NOT NULL,
             weight INTEGER NOT NULL DEFAULT 0,
-            position INTEGER NOT NULL DEFAULT 0
+            position INTEGER NOT NULL DEFAULT 0,
+            matrix_id TEXT REFERENCES matrices(id)
         )
         """
     )
+    parameter_columns = {row["name"] for row in conn.execute("PRAGMA table_info(questionnaire_parameters)").fetchall()}
+    if "matrix_id" not in parameter_columns:
+        conn.execute("ALTER TABLE questionnaire_parameters ADD COLUMN matrix_id TEXT REFERENCES matrices(id)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS parameter_answers (
@@ -1166,10 +1174,16 @@ def init_db():
             parameter_id INTEGER NOT NULL REFERENCES questionnaire_parameters(id),
             answer_id INTEGER REFERENCES parameter_answers(id),
             numeric_value REAL,
+            matrix_x TEXT,
+            matrix_y TEXT,
             UNIQUE (process_id, parameter_id)
         )
         """
     )
+    process_answer_columns = {row["name"] for row in conn.execute("PRAGMA table_info(process_answers)").fetchall()}
+    for col in ("matrix_x", "matrix_y"):
+        if col not in process_answer_columns:
+            conn.execute(f"ALTER TABLE process_answers ADD COLUMN {col} TEXT")
 
     _seed_re_proj_questionnaire_content(conn)
     _link_default_model_questionnaires(conn)
@@ -1891,11 +1905,18 @@ def get_process_scoring_structure(process_id: str):
         (model_id,),
     ).fetchall()
     saved_answers = {
-        row["parameter_id"]: {"answer_id": row["answer_id"], "numeric_value": row["numeric_value"]}
+        row["parameter_id"]: {
+            "answer_id": row["answer_id"],
+            "numeric_value": row["numeric_value"],
+            "matrix_x": row["matrix_x"],
+            "matrix_y": row["matrix_y"],
+        }
         for row in conn.execute(
-            "SELECT parameter_id, answer_id, numeric_value FROM process_answers WHERE process_id = ?", (process_id,)
+            "SELECT parameter_id, answer_id, numeric_value, matrix_x, matrix_y FROM process_answers WHERE process_id = ?",
+            (process_id,),
         ).fetchall()
     }
+    matrix_cache = {}
     questionnaires = []
     for link in q_links:
         q_row = conn.execute(
@@ -1904,7 +1925,7 @@ def get_process_scoring_structure(process_id: str):
         if not q_row:
             continue
         param_rows = conn.execute(
-            "SELECT id, name, type, weight FROM questionnaire_parameters WHERE questionnaire_id = ? ORDER BY position ASC",
+            "SELECT id, name, type, weight, matrix_id FROM questionnaire_parameters WHERE questionnaire_id = ? ORDER BY position ASC",
             (q_row["id"],),
         ).fetchall()
         parameters = []
@@ -1913,6 +1934,12 @@ def get_process_scoring_structure(process_id: str):
                 "SELECT id, text, score FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
                 (p["id"],),
             ).fetchall()
+            matrix = None
+            if p["type"] == "מטריצה" and p["matrix_id"]:
+                if p["matrix_id"] not in matrix_cache:
+                    m_row = conn.execute("SELECT * FROM matrices WHERE id = ?", (p["matrix_id"],)).fetchone()
+                    matrix_cache[p["matrix_id"]] = _attach_grid(conn, dict(m_row)) if m_row else None
+                matrix = matrix_cache[p["matrix_id"]]
             parameters.append(
                 {
                     "id": p["id"],
@@ -1920,6 +1947,8 @@ def get_process_scoring_structure(process_id: str):
                     "type": p["type"],
                     "weight": p["weight"],
                     "answers": [{"id": a["id"], "text": a["text"], "score": a["score"]} for a in answer_rows],
+                    "matrix_id": p["matrix_id"],
+                    "matrix": matrix,
                     "current_answer": saved_answers.get(p["id"]),
                 }
             )
@@ -1959,15 +1988,21 @@ def get_process_scoring_structure(process_id: str):
 
 
 def save_process_answer(
-    process_id: str, parameter_id: int, answer_id: int | None = None, numeric_value: float | None = None
+    process_id: str,
+    parameter_id: int,
+    answer_id: int | None = None,
+    numeric_value: float | None = None,
+    matrix_x: str | None = None,
+    matrix_y: str | None = None,
 ):
     conn = get_connection()
     conn.execute(
         "DELETE FROM process_answers WHERE process_id = ? AND parameter_id = ?", (process_id, parameter_id)
     )
     conn.execute(
-        "INSERT INTO process_answers (process_id, parameter_id, answer_id, numeric_value) VALUES (?, ?, ?, ?)",
-        (process_id, parameter_id, answer_id, numeric_value),
+        "INSERT INTO process_answers (process_id, parameter_id, answer_id, numeric_value, matrix_x, matrix_y) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (process_id, parameter_id, answer_id, numeric_value, matrix_x, matrix_y),
     )
     conn.commit()
     conn.close()
@@ -2011,6 +2046,22 @@ def _combine_scores(score_weight_pairs: list[tuple[float, float]], method: str):
     return sum(s * w for s, w in score_weight_pairs) / total_weight
 
 
+def _matrix_cell_score(matrix, matrix_x: str, matrix_y: str):
+    """Looks up the score for a מטריצה-type parameter's answer: the cell at
+    the intersection of the chosen X/Y axis labels. None if the matrix is
+    missing/has no grid or the labels no longer match its axes (e.g. the
+    matrix was edited after the answer was saved)."""
+    if not matrix or not matrix.get("cell_values"):
+        return None
+    x_values = matrix.get("x_values") or []
+    y_values = matrix.get("y_values") or []
+    if matrix_x not in x_values or matrix_y not in y_values:
+        return None
+    x_index = x_values.index(matrix_x)
+    y_index = y_values.index(matrix_y)
+    return matrix["cell_values"][y_index][x_index]
+
+
 def compute_process_score(process_id: str):
     """Computes completion% always, plus a running score/rating from
     whatever parameters are already answered — so the score updates live as
@@ -2038,6 +2089,8 @@ def compute_process_score(process_id: str):
                 if p["type"] == "סובייקטיבי" and answer.get("answer_id") is not None:
                     matching = next((a for a in p["answers"] if a["id"] == answer["answer_id"]), None)
                     score = matching["score"] if matching else None
+                elif p["type"] == "מטריצה" and answer.get("matrix_x") and answer.get("matrix_y"):
+                    score = _matrix_cell_score(p["matrix"], answer["matrix_x"], answer["matrix_y"])
                 elif answer.get("numeric_value") is not None:
                     score = answer["numeric_value"]
             if score is not None:
@@ -2658,6 +2711,7 @@ def _get_parameters_with_answers(conn, questionnaire_id: str):
                 "type": p["type"],
                 "weight": p["weight"],
                 "answers": [a["text"] for a in answer_rows],
+                "matrix_id": p["matrix_id"],
             }
         )
     return parameters
@@ -2714,8 +2768,8 @@ def _replace_questionnaire_parameters(conn, questionnaire_id: str, parameters: l
 
     for position, param in enumerate(parameters, start=1):
         cur = conn.execute(
-            "INSERT INTO questionnaire_parameters (questionnaire_id, name, type, weight, position) VALUES (?, ?, ?, ?, ?)",
-            (questionnaire_id, param["name"], param["type"], param["weight"], position),
+            "INSERT INTO questionnaire_parameters (questionnaire_id, name, type, weight, position, matrix_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (questionnaire_id, param["name"], param["type"], param["weight"], position, param.get("matrix_id")),
         )
         param_id = cur.lastrowid
         answers = param.get("answers") or []

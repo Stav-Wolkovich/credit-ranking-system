@@ -14,6 +14,14 @@ function Row({ label, value }) {
 
 const CALC_METHOD_LABELS = { "ממוצע משוקלל": "ממוצע משוקלל", "סכום": "סכום", "מקסימום": "מקסימום" };
 
+function matrixCellScore(matrix, x, y) {
+  if (!matrix || !matrix.cell_values || x == null || y == null) return null;
+  const xIndex = matrix.x_values.indexOf(x);
+  const yIndex = matrix.y_values.indexOf(y);
+  if (xIndex === -1 || yIndex === -1) return null;
+  return matrix.cell_values[yIndex]?.[xIndex] ?? null;
+}
+
 function answeredText(parameter) {
   const answer = parameter.current_answer;
   if (!answer) return null;
@@ -21,6 +29,13 @@ function answeredText(parameter) {
     if (answer.answer_id == null) return null;
     const matching = parameter.answers.find((a) => a.id === answer.answer_id);
     return matching ? { text: matching.text, score: matching.score } : null;
+  }
+  if (parameter.type === "מטריצה") {
+    if (answer.matrix_x == null || answer.matrix_y == null) return null;
+    return {
+      text: `${answer.matrix_x} / ${answer.matrix_y}`,
+      score: matrixCellScore(parameter.matrix, answer.matrix_x, answer.matrix_y),
+    };
   }
   if (answer.numeric_value == null) return null;
   return { text: null, score: answer.numeric_value };
