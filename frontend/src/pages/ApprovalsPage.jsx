@@ -2,18 +2,20 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
 import ApprovalReviewModal from "../components/ApprovalReviewModal.jsx";
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
 const COLUMNS = [
-  "סטטוס",
-  "מודל",
-  "צוות",
-  "ציון מחושב",
-  "דירוג מחושב",
-  "מסגרת",
-  "קוד",
-  "נושא הדירוג",
-  "מס' תהליך",
-  "פעולות",
+  { key: "status", label: "סטטוס", accessor: (r) => r.status },
+  { key: "model", label: "מודל", accessor: (r) => r.model },
+  { key: "team", label: "צוות", accessor: (r) => r.team },
+  { key: "computed_score", label: "ציון מחושב", accessor: (r) => r.computed_score ?? null },
+  { key: "computed_rating", label: "דירוג מחושב", accessor: (r) => r.computed_rating },
+  { key: "framework", label: "מסגרת", accessor: (r) => r.framework },
+  { key: "code", label: "קוד", accessor: (r) => r.code },
+  { key: "subject", label: "נושא הדירוג", accessor: (r) => r.subject },
+  { key: "id", label: "מס' תהליך", accessor: (r) => r.id },
+  { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
 ];
 
 const TABS = [
@@ -44,10 +46,27 @@ export default function ApprovalsPage() {
   }, [tab, loadTab]);
 
   const rows = data?.rows ?? [];
+  const filterState = useColumnFilters(rows, COLUMNS);
+  const { search, setSearch, filteredRows } = filterState;
 
   return (
     <div>
-      <PageHeader title="תור אישורים" />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+        <PageHeader title="תור אישורים" />
+        <input
+          type="text"
+          placeholder="חיפוש חופשי..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            padding: "8px 12px",
+            fontSize: 13,
+            width: 200,
+          }}
+        />
+      </div>
 
       <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 18 }}>
         {TABS.map((t) => (
@@ -75,15 +94,7 @@ export default function ApprovalsPage() {
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
         <table>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px", whiteSpace: "nowrap" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead columns={COLUMNS} filterState={filterState} />
           <tbody>
             {loading && (
               <tr>
@@ -92,14 +103,14 @@ export default function ApprovalsPage() {
                 </td>
               </tr>
             )}
-            {!loading && rows.length === 0 && !error && (
+            {!loading && filteredRows.length === 0 && !error && (
               <tr>
                 <td colSpan={COLUMNS.length} style={{ padding: 16, color: "var(--text-light)", textAlign: "center" }}>
                   {tab === "manager" ? "אין תהליכים הממתינים לאישור מנהל." : "אין תהליכים הממתינים לאישור ועדה."}
                 </td>
               </tr>
             )}
-            {rows.map((r) => (
+            {filteredRows.map((r) => (
               <tr key={r.id} style={{ borderTop: "1px solid var(--border)" }}>
                 <td style={{ padding: "12px 16px" }}>
                   <Badge label={r.status} tone={r.tone} />

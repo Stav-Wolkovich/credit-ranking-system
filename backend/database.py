@@ -22,6 +22,11 @@ Canonical ranking statuses: טיוטה, בעבודה, ממתין לאישור, �
 ממתין לוועדה, אושר ועדה, בתוקף, פג תוקף — plus the legacy בוטל/מושהה
 still used by a couple of seed rows.
 
+ranking_processes.status also includes נדחה בועדה: the ועדה rejected the
+model's computed rating and recorded its own final_rating instead (see
+reject_committee_process()). The process leaves the committee queue but
+isn't otherwise terminal.
+
 Ranking Processes columns are the fields the processes page displays: id,
 subject_issuer_id, code, framework_issuer_id, status, tone, final_score,
 final_rating, computed_score, computed_rating, completion — same
@@ -35,7 +40,12 @@ rankings row via _attach_process_context() for display.
 The תור אישורים (approvals queue) page is a two-stage workflow over
 ranking_processes.status: "בתהליך" (awaiting manager review) →
 approve_manager moves it to "ממתין לוועדה" (awaiting committee review) →
-approve_committee moves it to "אושר בוועדה" (final).
+approve_committee moves it straight to "בתוקף" (final — see
+activate_process()), skipping an intermediate "approved" resting state.
+activate_process() also updates the matching rankings row (status,
+tone, approval_date = today) so the report page's valid_from/valid_until
+(approval_date + 1 year, see get_all_rankings()) and expiring-soon
+tracking start immediately, since both rows represent the same תהליך.
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active.
@@ -79,7 +89,28 @@ questionnaire_id).
 questionnaire_parameters holds the scoring parameters that make up a
 questionnaire (questionnaire_id, name, type, weight, position).
 parameter_answers holds the ranked answer options for a parameter
-(parameter_id, text, position).
+(parameter_id, text, position, score — lower is better, matching the
+rating scale's direction). Subjective (סובייקטיבי) parameters are
+answered by picking one of these; objective (אובייקטיבי) parameters
+have no answer options and take a direct numeric score instead.
+
+process_answers holds what was actually answered for a ranking process
+(process_id, parameter_id, answer_id — for subjective — or
+numeric_value — for objective; UNIQUE per process+parameter, so saving
+again overwrites). compute_process_score() combines a process's answers
+into a result: each questionnaire's already-answered parameter scores
+combine via its own calculation_method (ממוצע משוקלל/סכום/מקסימום —
+unrecognized methods like מטריצה fall back to weighted average), then
+questionnaires with at least one answered parameter combine into a
+running score via a weighted average using their model_questionnaires
+weight — so the score updates live as questions are answered rather
+than only once the process is fully complete. completion% and
+`complete` (every parameter across every assigned questionnaire
+answered) are tracked separately from score/rating. get_rating_for_score()
+maps the running score onto the model's rating_scale_levels band. The
+result is persisted onto ranking_processes.computed_score/computed_rating/
+completion — the model's raw output, as distinct from final_score/
+final_rating which represent what a committee actually approved.
 
 Users columns are the fields the users page displays: id (username),
 full_name, email, active. user_roles links a user to the roles
@@ -258,6 +289,113 @@ SEED_ANSWER_TEXTS = [
     "יחסים פיננסים ונתח שוק הרבה מתחת לממוצע",
     "יחסים פיננסים חלשים מאד נתח שוק זניח",
 ]
+
+# Real parameter/answer content for RE-PROJ's three questionnaires, linked
+# to the model in init_db() (see _link_default_model_questionnaires) so the
+# "fill out questionnaires and compute a score" workflow has something real
+# to work with end-to-end. Each subjective parameter's answers are ordered
+# best-to-worst with an explicit score (lower = better, matching the
+# STANDARD rating scale's 0-4.5 range); objective parameters take a direct
+# score entry instead of a predefined answer list.
+SEED_RE_PROJ_QUESTIONNAIRES = {
+    "RE-PROJ-WEIGHTED": [
+        {
+            "name": "ניסיון היזם בפרויקטים דומים",
+            "type": "סובייקטיבי",
+            "weight": 25,
+            "answers": [
+                ("ניסיון רב ומוכח, מספר פרויקטים דומים שהושלמו בהצלחה", 0),
+                ("ניסיון טוב, פרויקט דומה אחד שהושלם בהצלחה", 1),
+                ("ניסיון מוגבל, פרויקטים קטנים יותר בלבד", 2),
+                ("ניסיון מועט, בעיקר בליווי ולא בהובלה", 3),
+                ("ללא ניסיון קודם בפרויקטים דומים", 4),
+            ],
+        },
+        {
+            "name": "שיעור מכירות/השכרות מראש",
+            "type": "סובייקטיבי",
+            "weight": 25,
+            "answers": [
+                ("מעל 70% מהיחידות נמכרו/הושכרו מראש", 0),
+                ("50%-70% מהיחידות נמכרו/הושכרו מראש", 1),
+                ("30%-50% מהיחידות נמכרו/הושכרו מראש", 2),
+                ("10%-30% מהיחידות נמכרו/הושכרו מראש", 3),
+                ("פחות מ-10% מהיחידות נמכרו/הושכרו מראש", 4),
+            ],
+        },
+        {
+            "name": "מיקום הפרויקט",
+            "type": "סובייקטיבי",
+            "weight": 20,
+            "answers": [
+                ("מיקום מוביל בביקוש גבוה מאוד", 0),
+                ("מיקום טוב בביקוש גבוה", 1),
+                ("מיקום סביר בביקוש ממוצע", 2),
+                ("מיקום חלש בביקוש נמוך", 3),
+                ("מיקום שולי בביקוש נמוך מאוד", 4),
+            ],
+        },
+        {
+            "name": "מינוף / יחס מימון (LTV)",
+            "type": "אובייקטיבי",
+            "weight": 30,
+            "answers": [],
+        },
+    ],
+    "RE-PROJ-ADJUST": [
+        {
+            "name": "חריגות בלוח זמנים",
+            "type": "סובייקטיבי",
+            "weight": 50,
+            "answers": [
+                ("אין חריגות", 0),
+                ("חריגה קלה עד 3 חודשים", 0.25),
+                ("חריגה בינונית 3-6 חודשים", 0.5),
+                ("חריגה משמעותית מעל 6 חודשים", 1),
+            ],
+        },
+        {
+            "name": "שינויים רגולטוריים או תכנוניים",
+            "type": "סובייקטיבי",
+            "weight": 50,
+            "answers": [
+                ("ללא שינויים", 0),
+                ("שינויים קלים ללא השפעה מהותית", 0.25),
+                ("שינויים משמעותיים המשפיעים על ההיתכנות", 0.75),
+            ],
+        },
+    ],
+    "RE-PROJ-MACRO": [
+        {
+            "name": "מצב שוק הנדל\"ן באזור",
+            "type": "סובייקטיבי",
+            "weight": 60,
+            "answers": [
+                ("שוק חזק במגמת עלייה", 0),
+                ("שוק יציב", 1),
+                ("שוק במגמת האטה קלה", 2),
+                ("שוק חלש במגמת ירידה", 3),
+            ],
+        },
+        {
+            "name": "סביבת ריבית ומאקרו",
+            "type": "סובייקטיבי",
+            "weight": 40,
+            "answers": [
+                ("סביבה תומכת (ריבית נמוכה/יורדת)", 0),
+                ("סביבה יציבה", 1),
+                ("סביבה מאתגרת (ריבית עולה)", 2),
+                ("סביבה קשה מאוד", 3),
+            ],
+        },
+    ],
+}
+
+# model_id -> [(questionnaire_id, weight), ...], linked in init_db() only if
+# the model has no questionnaires assigned yet.
+SEED_DEFAULT_MODEL_QUESTIONNAIRE_LINKS = {
+    "RE-PROJ": [("RE-PROJ-WEIGHTED", 70), ("RE-PROJ-ADJUST", 10), ("RE-PROJ-MACRO", 20)],
+}
 
 SEED_ROLE_ROWS = [
     {
@@ -961,10 +1099,14 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             parameter_id INTEGER NOT NULL REFERENCES questionnaire_parameters(id),
             text TEXT NOT NULL,
-            position INTEGER NOT NULL DEFAULT 0
+            position INTEGER NOT NULL DEFAULT 0,
+            score REAL
         )
         """
     )
+    answer_columns = {row["name"] for row in conn.execute("PRAGMA table_info(parameter_answers)").fetchall()}
+    if "score" not in answer_columns:
+        conn.execute("ALTER TABLE parameter_answers ADD COLUMN score REAL")
     parameter_count = conn.execute("SELECT COUNT(*) FROM questionnaire_parameters").fetchone()[0]
     if parameter_count == 0:
         for position, param in enumerate(SEED_PARAMETER_ROWS, start=1):
@@ -975,10 +1117,21 @@ def init_db():
             if position == 1:
                 param_id = cur.lastrowid
                 conn.executemany(
-                    "INSERT INTO parameter_answers (parameter_id, text, position) VALUES (?, ?, ?)",
-                    [(param_id, text, i) for i, text in enumerate(SEED_ANSWER_TEXTS, start=1)],
+                    "INSERT INTO parameter_answers (parameter_id, text, position, score) VALUES (?, ?, ?, ?)",
+                    [(param_id, text, i, round((i - 1) * 0.5, 2)) for i, text in enumerate(SEED_ANSWER_TEXTS, start=1)],
                 )
         conn.commit()
+    # Backfill any pre-existing answer rows (from before the score column
+    # existed) with an even 0.5-per-position spread, so nothing is left
+    # without a usable numeric score.
+    conn.execute(
+        """
+        UPDATE parameter_answers
+        SET score = (position - 1) * 0.5
+        WHERE score IS NULL
+        """
+    )
+    conn.commit()
 
     conn.execute(
         """
@@ -996,6 +1149,22 @@ def init_db():
         conn.execute("ALTER TABLE model_questionnaires ADD COLUMN weight INTEGER NOT NULL DEFAULT 0")
     if "position" not in model_q_columns:
         conn.execute("ALTER TABLE model_questionnaires ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS process_answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            process_id TEXT NOT NULL REFERENCES ranking_processes(id),
+            parameter_id INTEGER NOT NULL REFERENCES questionnaire_parameters(id),
+            answer_id INTEGER REFERENCES parameter_answers(id),
+            numeric_value REAL,
+            UNIQUE (process_id, parameter_id)
+        )
+        """
+    )
+
+    _seed_re_proj_questionnaire_content(conn)
+    _link_default_model_questionnaires(conn)
 
     conn.execute(
         """
@@ -1223,6 +1392,55 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+def _seed_re_proj_questionnaire_content(conn):
+    """Seeds real parameters (and, for subjective ones, scored answers) for
+    RE-PROJ's three questionnaires from SEED_RE_PROJ_QUESTIONNAIRES — only
+    for questionnaires that don't already have parameters, so it never
+    clobbers real edits made through the UI."""
+    for questionnaire_id, params in SEED_RE_PROJ_QUESTIONNAIRES.items():
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM questionnaire_parameters WHERE questionnaire_id = ?", (questionnaire_id,)
+        ).fetchone()[0]
+        if existing:
+            continue
+        for position, param in enumerate(params, start=1):
+            cur = conn.execute(
+                "INSERT INTO questionnaire_parameters (questionnaire_id, name, type, weight, position) VALUES (?, ?, ?, ?, ?)",
+                (questionnaire_id, param["name"], param["type"], param["weight"], position),
+            )
+            param_id = cur.lastrowid
+            if param["answers"]:
+                conn.executemany(
+                    "INSERT INTO parameter_answers (parameter_id, text, position, score) VALUES (?, ?, ?, ?)",
+                    [(param_id, text, i, score) for i, (text, score) in enumerate(param["answers"], start=1)],
+                )
+    conn.commit()
+
+
+def _link_default_model_questionnaires(conn):
+    """Links SEED_DEFAULT_MODEL_QUESTIONNAIRE_LINKS — only for models that
+    have no questionnaires assigned yet — so the scoring workflow has a
+    real model->questionnaires->parameters chain to work with out of the
+    box, without overwriting any real assignment made through the UI."""
+    for model_id, links in SEED_DEFAULT_MODEL_QUESTIONNAIRE_LINKS.items():
+        if not conn.execute("SELECT 1 FROM models WHERE id = ?", (model_id,)).fetchone():
+            continue
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM model_questionnaires WHERE model_id = ?", (model_id,)
+        ).fetchone()[0]
+        if existing:
+            continue
+        conn.executemany(
+            "INSERT INTO model_questionnaires (model_id, questionnaire_id, weight, position) VALUES (?, ?, ?, ?)",
+            [(model_id, q_id, weight, i) for i, (q_id, weight) in enumerate(links)],
+        )
+        if not conn.execute("SELECT rating_scale_id FROM models WHERE id = ?", (model_id,)).fetchone()["rating_scale_id"]:
+            standard_scale = conn.execute("SELECT 1 FROM rating_scales WHERE id = ?", ("STANDARD",)).fetchone()
+            if standard_scale:
+                conn.execute("UPDATE models SET rating_scale_id = ? WHERE id = ?", ("STANDARD", model_id))
+    conn.commit()
 
 
 def _seed_budget_matrix_grid(conn):
@@ -1501,6 +1719,43 @@ def update_process_status(process_id: str, status: str, tone: str):
     return process
 
 
+def activate_process(process_id: str):
+    """Committee approval skips an intermediate "approved" resting state and
+    activates the ranking directly: ranking_processes moves to בתוקף, and so
+    does its matching rankings row, with approval_date stamped to today so
+    the report page's 1-year validity window (get_all_rankings()) and
+    expiring-soon tracking apply immediately."""
+    today = date.today().isoformat()
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET status = ?, tone = ? WHERE id = ?",
+        ("בתוקף", "green", process_id),
+    )
+    conn.execute(
+        "UPDATE rankings SET status = ?, tone = ?, approval_date = ? WHERE id = ?",
+        ("בתוקף", "green", today, process_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_process(process_id)
+
+
+def reject_committee_process(process_id: str, final_rating: str):
+    """The ועדה can reject the model's computed rating and record its own
+    final_rating instead — computed_rating stays untouched so both are
+    visible side by side (the processes/approvals pages already show
+    ציון/דירוג מחושב and ציון/דירוג סופי as separate columns). The process
+    leaves the committee queue: status moves to "נדחה בועדה"."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET final_rating = ?, status = ?, tone = ? WHERE id = ?",
+        (final_rating, "נדחה בועדה", "red", process_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_process(process_id)
+
+
 def _next_process_id():
     conn = get_connection()
     max_num = 0
@@ -1554,6 +1809,223 @@ def create_ranking_process(
     conn.commit()
     conn.close()
     return get_process(new_id)
+
+
+def get_process_model_id(process_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT model_id FROM rankings WHERE id = ?", (process_id,)).fetchone()
+    conn.close()
+    return row["model_id"] if row else None
+
+
+def get_process_scoring_structure(process_id: str):
+    """Everything the "fill out questionnaires" UI needs: the process's
+    model, its questionnaires (weight + calculation_method), each
+    questionnaire's parameters (weight, type, scored answers for
+    subjective ones), and the process's currently saved answer for each
+    parameter. Returns None if the process has no model assigned."""
+    model_id = get_process_model_id(process_id)
+    if not model_id:
+        return None
+    conn = get_connection()
+    model_row = conn.execute("SELECT id, name, rating_scale_id FROM models WHERE id = ?", (model_id,)).fetchone()
+    if not model_row:
+        conn.close()
+        return None
+    q_links = conn.execute(
+        "SELECT questionnaire_id, weight FROM model_questionnaires WHERE model_id = ? ORDER BY position ASC",
+        (model_id,),
+    ).fetchall()
+    saved_answers = {
+        row["parameter_id"]: {"answer_id": row["answer_id"], "numeric_value": row["numeric_value"]}
+        for row in conn.execute(
+            "SELECT parameter_id, answer_id, numeric_value FROM process_answers WHERE process_id = ?", (process_id,)
+        ).fetchall()
+    }
+    questionnaires = []
+    for link in q_links:
+        q_row = conn.execute(
+            "SELECT id, name, calculation_method FROM questionnaires WHERE id = ?", (link["questionnaire_id"],)
+        ).fetchone()
+        if not q_row:
+            continue
+        param_rows = conn.execute(
+            "SELECT id, name, type, weight FROM questionnaire_parameters WHERE questionnaire_id = ? ORDER BY position ASC",
+            (q_row["id"],),
+        ).fetchall()
+        parameters = []
+        for p in param_rows:
+            answer_rows = conn.execute(
+                "SELECT id, text, score FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
+                (p["id"],),
+            ).fetchall()
+            parameters.append(
+                {
+                    "id": p["id"],
+                    "name": p["name"],
+                    "type": p["type"],
+                    "weight": p["weight"],
+                    "answers": [{"id": a["id"], "text": a["text"], "score": a["score"]} for a in answer_rows],
+                    "current_answer": saved_answers.get(p["id"]),
+                }
+            )
+        questionnaires.append(
+            {
+                "id": q_row["id"],
+                "name": q_row["name"],
+                "calculation_method": q_row["calculation_method"],
+                "weight": link["weight"],
+                "parameters": parameters,
+            }
+        )
+    rating_scale_levels = []
+    rating_scale_name = None
+    if model_row["rating_scale_id"]:
+        scale_row = conn.execute(
+            "SELECT name FROM rating_scales WHERE id = ?", (model_row["rating_scale_id"],)
+        ).fetchone()
+        rating_scale_name = scale_row["name"] if scale_row else None
+        rating_scale_levels = [
+            {"label": lvl["label"], "min_value": lvl["min_value"], "max_value": lvl["max_value"]}
+            for lvl in conn.execute(
+                "SELECT label, min_value, max_value FROM rating_scale_levels WHERE rating_scale_id = ? ORDER BY position ASC",
+                (model_row["rating_scale_id"],),
+            ).fetchall()
+        ]
+    conn.close()
+    return {
+        "process_id": process_id,
+        "model_id": model_row["id"],
+        "model_name": model_row["name"],
+        "rating_scale_id": model_row["rating_scale_id"],
+        "rating_scale_name": rating_scale_name,
+        "rating_scale_levels": rating_scale_levels,
+        "questionnaires": questionnaires,
+    }
+
+
+def save_process_answer(
+    process_id: str, parameter_id: int, answer_id: int | None = None, numeric_value: float | None = None
+):
+    conn = get_connection()
+    conn.execute(
+        "DELETE FROM process_answers WHERE process_id = ? AND parameter_id = ?", (process_id, parameter_id)
+    )
+    conn.execute(
+        "INSERT INTO process_answers (process_id, parameter_id, answer_id, numeric_value) VALUES (?, ?, ?, ?)",
+        (process_id, parameter_id, answer_id, numeric_value),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_rating_for_score(rating_scale_id: str, score: float):
+    """Finds which rating_scale_levels band a score falls into. A score
+    outside the scale's defined range clamps to the nearest boundary label
+    rather than returning nothing."""
+    conn = get_connection()
+    levels = conn.execute(
+        "SELECT label, min_value, max_value FROM rating_scale_levels WHERE rating_scale_id = ? ORDER BY position ASC",
+        (rating_scale_id,),
+    ).fetchall()
+    conn.close()
+    if not levels:
+        return None
+    for level in levels:
+        if level["min_value"] <= score < level["max_value"]:
+            return level["label"]
+    if score < levels[0]["min_value"]:
+        return levels[0]["label"]
+    return levels[-1]["label"]
+
+
+def _combine_scores(score_weight_pairs: list[tuple[float, float]], method: str):
+    """score_weight_pairs: (score, weight) for every already-answered/scored
+    item being combined. סכום sums the raw scores; מקסימום takes the worst
+    (highest — lower is better) one; anything else — ממוצע משוקלל, or an
+    unrecognized method like מטריצה with no scoring engine here — falls
+    back to a weighted average (a plain average if weights are all zero)."""
+    if not score_weight_pairs:
+        return None
+    if method == "סכום":
+        return sum(s for s, _ in score_weight_pairs)
+    if method == "מקסימום":
+        return max(s for s, _ in score_weight_pairs)
+    total_weight = sum(w for _, w in score_weight_pairs)
+    if total_weight <= 0:
+        return sum(s for s, _ in score_weight_pairs) / len(score_weight_pairs)
+    return sum(s * w for s, w in score_weight_pairs) / total_weight
+
+
+def compute_process_score(process_id: str):
+    """Computes completion% always, plus a running score/rating from
+    whatever parameters are already answered — so the score updates live as
+    the user goes, not only once every question is answered. `complete`
+    still means every parameter across every questionnaire has a saved
+    answer (used to show the final, validated result). Each questionnaire's
+    answered parameter scores combine per its own calculation_method;
+    questionnaires with at least one answered parameter then combine into
+    the running score via a weighted average using their
+    model_questionnaires weight."""
+    structure = get_process_scoring_structure(process_id)
+    if not structure:
+        return None
+
+    total_params = 0
+    answered_params = 0
+    questionnaire_results = []
+    for q in structure["questionnaires"]:
+        param_scores = []
+        for p in q["parameters"]:
+            total_params += 1
+            answer = p["current_answer"]
+            score = None
+            if answer:
+                if p["type"] == "סובייקטיבי" and answer.get("answer_id") is not None:
+                    matching = next((a for a in p["answers"] if a["id"] == answer["answer_id"]), None)
+                    score = matching["score"] if matching else None
+                elif answer.get("numeric_value") is not None:
+                    score = answer["numeric_value"]
+            if score is not None:
+                answered_params += 1
+                param_scores.append((score, p["weight"]))
+        q_complete = bool(q["parameters"]) and len(param_scores) == len(q["parameters"])
+        q_score = _combine_scores(param_scores, q["calculation_method"]) if param_scores else None
+        questionnaire_results.append(
+            {"id": q["id"], "name": q["name"], "weight": q["weight"], "score": q_score, "complete": q_complete}
+        )
+
+    completion = round((answered_params / total_params) * 100) if total_params else 0
+    complete = total_params > 0 and answered_params == total_params
+
+    final_score = None
+    final_rating = None
+    scored = [(q["score"], q["weight"]) for q in questionnaire_results if q["score"] is not None]
+    if scored:
+        final_score = round(_combine_scores(scored, "ממוצע משוקלל"), 2)
+        if structure["rating_scale_id"]:
+            final_rating = get_rating_for_score(structure["rating_scale_id"], final_score)
+
+    return {
+        "process_id": process_id,
+        "completion": completion,
+        "complete": complete,
+        "questionnaires": questionnaire_results,
+        "score": final_score,
+        "rating": final_rating,
+        "has_rating_scale": bool(structure["rating_scale_id"]),
+    }
+
+
+def save_process_computed_result(process_id: str, score: float | None, rating: str | None, completion: int):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET computed_score = ?, computed_rating = ?, completion = ? WHERE id = ?",
+        (score, rating, completion, process_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_process(process_id)
 
 
 def get_all_issuers():
@@ -1938,6 +2410,18 @@ def update_model(
     return get_model(id)
 
 
+STATUS_TONE = {"טיוטה": "gray", "פעיל": "green"}
+
+
+def update_model_status(model_id: str, status: str):
+    tone = STATUS_TONE.get(status, "gray")
+    conn = get_connection()
+    conn.execute("UPDATE models SET status = ?, tone = ? WHERE id = ?", (status, tone, model_id))
+    conn.commit()
+    conn.close()
+    return get_model(model_id)
+
+
 def delete_model(model_id: str):
     conn = get_connection()
     conn.execute("DELETE FROM model_questionnaires WHERE model_id = ?", (model_id,))
@@ -2232,6 +2716,17 @@ def update_questionnaire(
     conn.commit()
     conn.close()
     return get_questionnaire(id)
+
+
+def update_questionnaire_status(questionnaire_id: str, status: str):
+    tone = STATUS_TONE.get(status, "gray")
+    conn = get_connection()
+    conn.execute(
+        "UPDATE questionnaires SET status = ?, tone = ? WHERE id = ?", (status, tone, questionnaire_id)
+    )
+    conn.commit()
+    conn.close()
+    return get_questionnaire(questionnaire_id)
 
 
 def delete_questionnaire(questionnaire_id: str):

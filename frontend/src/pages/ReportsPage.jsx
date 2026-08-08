@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { PageHeader, ErrorBanner } from "../components/ui.jsx";
 import ReportModal from "../components/ReportModal.jsx";
@@ -11,6 +11,7 @@ export default function ReportsPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
   const [previewTarget, setPreviewTarget] = useState(null);
   const [exportingId, setExportingId] = useState(null);
@@ -29,6 +30,13 @@ export default function ReportsPage() {
   }, [loadReports]);
 
   const rows = data?.rows ?? [];
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) =>
+      [r.id, r.title, r.purpose, r.content].some((v) => v && v.toLowerCase().includes(q))
+    );
+  }, [rows, search]);
 
   function handleExportExcel(report) {
     if (ENTITY_SELECT_REPORT_TYPES.includes(report.report_type)) {
@@ -79,34 +87,49 @@ export default function ReportsPage() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
         <PageHeader title="ניהול דוחות" />
-        <button
-          type="button"
-          onClick={() => setModal({ mode: "create" })}
-          style={{
-            background: "var(--accent)",
-            color: "#fff",
-            border: "none",
-            borderRadius: 6,
-            padding: "9px 16px",
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          + צור דוח
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input
+            type="text"
+            placeholder="חיפוש חופשי..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "8px 12px",
+              fontSize: 13,
+              width: 200,
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => setModal({ mode: "create" })}
+            style={{
+              background: "var(--accent)",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              padding: "9px 16px",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            + צור דוח
+          </button>
+        </div>
       </div>
 
       {error && <ErrorBanner message={error} />}
 
       {loading && <div style={{ padding: 16, color: "var(--text-light)", fontSize: 13 }}>טוען נתונים…</div>}
-      {!loading && rows.length === 0 && !error && (
+      {!loading && filteredRows.length === 0 && !error && (
         <div style={{ padding: 16, color: "var(--text-light)", fontSize: 13 }}>אין דוחות להצגה.</div>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 16 }}>
-        {rows.map((r) => (
+        {filteredRows.map((r) => (
           <div key={r.id} style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, padding: 18, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
               <div>

@@ -1,15 +1,25 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner, ConfirmDialog } from "../components/ui.jsx";
 import IssuerModal from "../components/IssuerModal.jsx";
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
-const COLUMNS = ["קוד מנפיק", "שם מנפיק", "סוג", "סקטור", "מדינה", "פעיל", "נכסים מקושרים", "פעולות"];
+const COLUMNS = [
+  { key: "id", label: "קוד מנפיק", accessor: (r) => r.id },
+  { key: "name", label: "שם מנפיק", accessor: (r) => r.name },
+  { key: "type", label: "סוג", accessor: (r) => r.type },
+  { key: "sector", label: "סקטור", accessor: (r) => r.sector },
+  { key: "country", label: "מדינה", accessor: (r) => r.country },
+  { key: "active", label: "פעיל", accessor: (r) => (r.active ? "פעיל" : "לא פעיל") },
+  { key: "assets", label: "נכסים מקושרים", accessor: () => null, filterable: false },
+  { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
+];
 
 export default function IssuersPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
@@ -27,12 +37,8 @@ export default function IssuersPage() {
   }, [loadIssuers]);
 
   const rows = data?.rows ?? [];
-
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q));
-  }, [rows, search]);
+  const filterState = useColumnFilters(rows, COLUMNS);
+  const { search, setSearch, filteredRows } = filterState;
 
   function confirmDelete() {
     const issuer = deleteTarget;
@@ -85,15 +91,7 @@ export default function IssuersPage() {
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
         <table>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead columns={COLUMNS} filterState={filterState} />
           <tbody>
             {loading && (
               <tr>

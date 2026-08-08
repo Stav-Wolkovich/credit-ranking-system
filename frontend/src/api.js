@@ -35,6 +35,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(process),
     }),
+  getProcessScoring: (id) => request(`/processes/${id}/scoring`),
+  saveProcessAnswer: (id, payload) =>
+    request(`/processes/${id}/answers`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  applyProcessStatusAction: (id, action) =>
+    request(`/processes/${id}/status-action`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
   getIssuers: () => request("/issuers"),
   createIssuer: (issuer) =>
     request("/issuers", {
@@ -81,6 +92,11 @@ export const api = {
       body: JSON.stringify(model),
     }),
   deleteModel: (id) => request(`/models/${id}`, { method: "DELETE" }),
+  updateModelStatus: (id, payload) =>
+    request(`/models/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   getRatingScales: () => request("/rating-scales"),
   getRatingScale: (id) => request(`/rating-scales/${id}`),
   createRatingScale: (scale) =>
@@ -107,6 +123,11 @@ export const api = {
       body: JSON.stringify(questionnaire),
     }),
   deleteQuestionnaire: (id) => request(`/questionnaires/${id}`, { method: "DELETE" }),
+  updateQuestionnaireStatus: (id, payload) =>
+    request(`/questionnaires/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   duplicateQuestionnaire: (id, payload) =>
     request(`/questionnaires/${id}/duplicate`, {
       method: "POST",
@@ -116,6 +137,11 @@ export const api = {
   getCommitteeApprovals: () => request("/approvals/committee"),
   approveManagerProcess: (id) => request(`/approvals/${id}/approve-manager`, { method: "POST" }),
   approveCommitteeProcess: (id) => request(`/approvals/${id}/approve-committee`, { method: "POST" }),
+  rejectCommitteeProcess: (id, payload) =>
+    request(`/approvals/${id}/reject-committee`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getRoles: () => request("/roles"),
   createRole: (role) =>
     request("/roles", {

@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { PageHeader, ErrorBanner } from "../components/ui.jsx";
 import RoleModal from "../components/RoleModal.jsx";
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
 const PERMISSION_COLUMNS = [
   { key: "can_view", label: "צפייה" },
@@ -13,7 +15,13 @@ const PERMISSION_COLUMNS = [
   { key: "can_rerun", label: "הרצה מחדש" },
 ];
 
-const COLUMNS = ["תפקיד", "קבוצת AD", "תיאור תפקיד", ...PERMISSION_COLUMNS.map((p) => p.label), "פעולות"];
+const COLUMNS = [
+  { key: "name", label: "תפקיד", accessor: (r) => r.name },
+  { key: "id", label: "קבוצת AD", accessor: (r) => r.id },
+  { key: "description", label: "תיאור תפקיד", accessor: (r) => r.description },
+  ...PERMISSION_COLUMNS.map((p) => ({ key: p.key, label: p.label, accessor: (r) => (r[p.key] ? "✓" : "—") })),
+  { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
+];
 
 const COLUMN_WIDTHS = [170, 150, 300, ...PERMISSION_COLUMNS.map(() => 90), 70];
 
@@ -45,28 +53,45 @@ export default function RolesPage() {
   }, [loadRoles]);
 
   const rows = data?.rows ?? [];
+  const filterState = useColumnFilters(rows, COLUMNS);
+  const { search, setSearch, filteredRows } = filterState;
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
         <PageHeader title="ניהול תפקידים" />
-        <button
-          type="button"
-          onClick={() => setModal({ mode: "create" })}
-          style={{
-            background: "var(--accent)",
-            color: "#fff",
-            border: "none",
-            borderRadius: 6,
-            padding: "9px 16px",
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          + צור תפקיד
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input
+            type="text"
+            placeholder="חיפוש חופשי..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "8px 12px",
+              fontSize: 13,
+              width: 200,
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => setModal({ mode: "create" })}
+            style={{
+              background: "var(--accent)",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              padding: "9px 16px",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            + צור תפקיד
+          </button>
+        </div>
       </div>
 
       {error && <ErrorBanner message={error} />}
@@ -78,15 +103,10 @@ export default function RolesPage() {
               <col key={i} style={{ width: w }} />
             ))}
           </colgroup>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead
+            columns={COLUMNS}
+            filterState={filterState}
+          />
           <tbody>
             {loading && (
               <tr>
@@ -95,14 +115,14 @@ export default function RolesPage() {
                 </td>
               </tr>
             )}
-            {!loading && rows.length === 0 && !error && (
+            {!loading && filteredRows.length === 0 && !error && (
               <tr>
                 <td colSpan={COLUMNS.length} style={{ padding: 16, color: "var(--text-light)", textAlign: "center" }}>
                   אין תפקידים להצגה.
                 </td>
               </tr>
             )}
-            {rows.map((r) => (
+            {filteredRows.map((r) => (
               <tr key={r.id} style={{ borderTop: "1px solid var(--border)" }}>
                 <td style={{ padding: "12px 16px", overflowWrap: "break-word" }}>
                   <div style={{ fontWeight: 600 }}>{r.name}</div>

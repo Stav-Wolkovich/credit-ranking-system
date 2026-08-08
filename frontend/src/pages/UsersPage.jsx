@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
 import UserModal from "../components/UserModal.jsx";
-
-const COLUMNS = ["שם מלא", "תפקידים", "פעיל", "פעולות"];
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
 const selectStyle = {
   border: "1px solid var(--border)",
@@ -38,7 +38,6 @@ export default function UsersPage() {
   const [roles, setRoles] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [userModal, setUserModal] = useState(null);
 
   const loadUsers = useCallback(() => {
@@ -71,11 +70,21 @@ export default function UsersPage() {
 
   const rows = data?.rows ?? [];
 
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => r.full_name.toLowerCase().includes(q));
-  }, [rows, search]);
+  const columns = useMemo(
+    () => [
+      { key: "full_name", label: "שם מלא", accessor: (r) => r.full_name },
+      {
+        key: "roles",
+        label: "תפקידים",
+        accessor: (r) => r.role_ids.map((roleId) => roleNameById[roleId] ?? roleId),
+      },
+      { key: "active", label: "פעיל", accessor: (r) => (r.active ? "פעיל" : "לא פעיל") },
+      { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
+    ],
+    [roleNameById]
+  );
+  const filterState = useColumnFilters(rows, columns);
+  const { search, setSearch, filteredRows } = filterState;
 
   return (
     <div>
@@ -84,7 +93,7 @@ export default function UsersPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <input
             type="text"
-            placeholder="חיפוש שם"
+            placeholder="חיפוש חופשי..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ ...selectStyle, width: 180 }}
@@ -113,26 +122,18 @@ export default function UsersPage() {
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
         <table>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead columns={columns} filterState={filterState} />
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={COLUMNS.length} style={{ padding: 16, color: "var(--text-light)", textAlign: "center" }}>
+                <td colSpan={columns.length} style={{ padding: 16, color: "var(--text-light)", textAlign: "center" }}>
                   טוען נתונים…
                 </td>
               </tr>
             )}
             {!loading && filteredRows.length === 0 && !error && (
               <tr>
-                <td colSpan={COLUMNS.length} style={{ padding: 16, color: "var(--text-light)", textAlign: "center" }}>
+                <td colSpan={columns.length} style={{ padding: 16, color: "var(--text-light)", textAlign: "center" }}>
                   אין משתמשים להצגה.
                 </td>
               </tr>

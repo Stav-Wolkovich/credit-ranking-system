@@ -1,24 +1,26 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, StatCard, PageHeader, ErrorBanner } from "../components/ui.jsx";
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
 const COLUMNS = [
-  "סטטוס",
-  "מודל",
-  "צוות",
-  "ציון מחושב",
-  "דירוג מחושב",
-  "ציון סופי",
-  "דירוג סופי",
-  "השלמה",
-  "תוקף מ-",
-  "תוקף עד",
-  "תאריך נתונים",
-  "מסגרת",
-  "סוג",
-  "קוד",
-  "נושא הדירוג",
-  "מס' תהליך",
+  { key: "status", label: "סטטוס", accessor: (r) => r.status },
+  { key: "model", label: "מודל", accessor: (r) => r.model },
+  { key: "team", label: "צוות", accessor: (r) => r.team },
+  { key: "computed_score", label: "ציון מחושב", accessor: (r) => r.computed_score ?? null },
+  { key: "computed_rating", label: "דירוג מחושב", accessor: (r) => r.computed_rating },
+  { key: "final_score", label: "ציון סופי", accessor: (r) => r.final_score ?? null },
+  { key: "final_rating", label: "דירוג סופי", accessor: (r) => r.final_rating },
+  { key: "completion", label: "השלמה", accessor: (r) => `${r.completion}%` },
+  { key: "valid_from", label: "תוקף מ-", accessor: (r) => r.valid_from },
+  { key: "valid_until", label: "תוקף עד", accessor: (r) => r.valid_until },
+  { key: "data_date", label: "תאריך נתונים", accessor: (r) => r.data_date },
+  { key: "framework", label: "מסגרת", accessor: (r) => r.framework },
+  { key: "kind", label: "סוג", accessor: (r) => r.kind },
+  { key: "code", label: "קוד", accessor: (r) => r.code },
+  { key: "subject", label: "נושא הדירוג", accessor: (r) => r.subject },
+  { key: "id", label: "מס' תהליך", accessor: (r) => r.id },
 ];
 
 export default function ReportPage() {
@@ -77,14 +79,31 @@ export default function ReportPage() {
 
   const summary = data?.summary;
   const rows = data?.rows ?? [];
+  const filterState = useColumnFilters(rows, COLUMNS);
+  const { search, setSearch, filteredRows } = filterState;
 
   return (
     <div>
-      <PageHeader
-        crumbs={["בית", "דירוג פנימי", "דוח דירוג פנימי"]}
-        title="דוח דירוג פנימי"
-        meta={summary ? `${summary.total_processes} תהליכים · עודכן ${summary.last_updated}` : "טוען…"}
-      />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+        <PageHeader
+          crumbs={["בית", "דירוג פנימי", "דוח דירוג פנימי"]}
+          title="דוח דירוג פנימי"
+          meta={summary ? `${summary.total_processes} תהליכים · עודכן ${summary.last_updated}` : "טוען…"}
+        />
+        <input
+          type="text"
+          placeholder="חיפוש חופשי..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            padding: "8px 12px",
+            fontSize: 13,
+            width: 200,
+          }}
+        />
+      </div>
 
       {error && <ErrorBanner message={error} />}
 
@@ -121,15 +140,7 @@ export default function ReportPage() {
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
         <table>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead columns={COLUMNS} filterState={filterState} />
           <tbody>
             {loading && (
               <tr>
@@ -138,14 +149,14 @@ export default function ReportPage() {
                 </td>
               </tr>
             )}
-            {!loading && rows.length === 0 && !error && (
+            {!loading && filteredRows.length === 0 && !error && (
               <tr>
                 <td colSpan={COLUMNS.length} style={{ padding: 16, color: "var(--text-light)", textAlign: "center" }}>
                   אין תהליכים להצגה.
                 </td>
               </tr>
             )}
-            {rows.map((r) => (
+            {filteredRows.map((r) => (
               <tr key={r.id} style={{ borderTop: "1px solid var(--border)" }}>
                 <td style={{ padding: "12px 16px" }}>
                   <Badge label={r.status} tone={r.tone} />

@@ -1,23 +1,23 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner, ConfirmDialog } from "../components/ui.jsx";
 import QuestionnaireModal from "../components/QuestionnaireModal.jsx";
 import DuplicateQuestionnaireModal from "../components/DuplicateQuestionnaireModal.jsx";
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
 const COLUMNS = [
-  "קוד שאלון",
-  "שם שאלון",
-  "גרסה",
-  "סטטוס",
-  "סוג",
-  "פרמטרים",
-  "שיטת חישוב",
-  "נוצר",
-  "נוצר ע\"י",
-  "פעולות",
+  { key: "id", label: "קוד שאלון", accessor: (r) => r.id },
+  { key: "name", label: "שם שאלון", accessor: (r) => r.name },
+  { key: "version", label: "גרסה", accessor: (r) => r.version },
+  { key: "status", label: "סטטוס", accessor: (r) => r.status },
+  { key: "type", label: "סוג", accessor: (r) => r.type },
+  { key: "parameters_count", label: "פרמטרים", accessor: (r) => r.parameters_count },
+  { key: "calculation_method", label: "שיטת חישוב", accessor: (r) => r.calculation_method },
+  { key: "created_date", label: "נוצר", accessor: (r) => r.created_date },
+  { key: "created_by_name", label: "נוצר ע\"י", accessor: (r) => r.created_by_name },
+  { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
 ];
-
-const STATUS_OPTIONS = ["פעיל", "טיוטה"];
 
 const selectStyle = {
   border: "1px solid var(--border)",
@@ -27,12 +27,12 @@ const selectStyle = {
   background: "#fff",
 };
 
+const STATUS_TONE = { "טיוטה": "gray", "פעיל": "green" };
+
 export default function QuestionnairesPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
   const [modal, setModal] = useState(null);
   const [duplicateTarget, setDuplicateTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -51,21 +51,22 @@ export default function QuestionnairesPage() {
   }, [loadQuestionnaires]);
 
   const rows = data?.rows ?? [];
-
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return rows.filter((r) => {
-      if (statusFilter && r.status !== statusFilter) return false;
-      if (q && !r.name.toLowerCase().includes(q) && !r.id.toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }, [rows, search, statusFilter]);
+  const filterState = useColumnFilters(rows, COLUMNS);
+  const { search, setSearch, filteredRows } = filterState;
 
   function confirmDelete() {
     const questionnaire = deleteTarget;
     setDeleteTarget(null);
     api
       .deleteQuestionnaire(questionnaire.id)
+      .then(() => loadQuestionnaires())
+      .catch((err) => setError(err.message));
+  }
+
+  function toggleStatus(questionnaire) {
+    const nextStatus = questionnaire.status === "פעיל" ? "טיוטה" : "פעיל";
+    api
+      .updateQuestionnaireStatus(questionnaire.id, { status: nextStatus, tone: STATUS_TONE[nextStatus] })
       .then(() => loadQuestionnaires())
       .catch((err) => setError(err.message));
   }
@@ -77,19 +78,11 @@ export default function QuestionnairesPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <input
             type="text"
-            placeholder="חיפוש שם / קוד"
+            placeholder="חיפוש חופשי..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ ...selectStyle, width: 180 }}
           />
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
-            <option value="">הכל - סטטוס</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
           <button
             type="button"
             onClick={() => setModal({ mode: "create" })}
@@ -114,15 +107,7 @@ export default function QuestionnairesPage() {
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
         <table>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead columns={COLUMNS} filterState={filterState} />
           <tbody>
             {loading && (
               <tr>
@@ -144,7 +129,25 @@ export default function QuestionnairesPage() {
                 <td style={{ padding: "12px 16px" }}>{r.name}</td>
                 <td style={{ padding: "12px 16px" }}>{r.version}</td>
                 <td style={{ padding: "12px 16px" }}>
-                  <Badge label={r.status} tone={r.tone} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Badge label={r.status} tone={r.tone} />
+                    <button
+                      type="button"
+                      onClick={() => toggleStatus(r)}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        padding: "2px 8px",
+                        fontSize: 11,
+                        cursor: "pointer",
+                        color: "var(--text-mid)",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {r.status === "פעיל" ? "החזר לטיוטה" : "הפוך לפעיל"}
+                    </button>
+                  </div>
                 </td>
                 <td style={{ padding: "12px 16px" }}>{r.type}</td>
                 <td style={{ padding: "12px 16px" }}>{r.parameters_count}</td>

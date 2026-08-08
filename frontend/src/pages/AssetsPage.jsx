@@ -1,15 +1,24 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
 import AssetModal from "../components/AssetModal.jsx";
+import { FilterableTableHead } from "../components/FilterableTh.jsx";
+import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
-const COLUMNS = ["קוד נכס", "שם נכס", "סוג", "מנפיק", "שלב מחזור", "פעיל", "פעולות"];
+const COLUMNS = [
+  { key: "id", label: "קוד נכס", accessor: (r) => r.id },
+  { key: "name", label: "שם נכס", accessor: (r) => r.name },
+  { key: "type", label: "סוג", accessor: (r) => r.type },
+  { key: "issuer_name", label: "מנפיק", accessor: (r) => r.issuer_name },
+  { key: "cycle_stage", label: "שלב מחזור", accessor: (r) => r.cycle_stage },
+  { key: "active", label: "פעיל", accessor: (r) => (r.active ? "פעיל" : "לא פעיל") },
+  { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
+];
 
 export default function AssetsPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
 
   const loadAssets = useCallback(() => {
@@ -26,12 +35,8 @@ export default function AssetsPage() {
   }, [loadAssets]);
 
   const rows = data?.rows ?? [];
-
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q));
-  }, [rows, search]);
+  const filterState = useColumnFilters(rows, COLUMNS);
+  const { search, setSearch, filteredRows } = filterState;
 
   return (
     <div>
@@ -81,15 +86,7 @@ export default function AssetsPage() {
 
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
         <table>
-          <thead>
-            <tr style={{ background: "var(--navy)" }}>
-              {COLUMNS.map((c) => (
-                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px" }}>
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <FilterableTableHead columns={COLUMNS} filterState={filterState} />
           <tbody>
             {loading && (
               <tr>

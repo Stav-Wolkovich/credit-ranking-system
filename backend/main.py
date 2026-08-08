@@ -291,7 +291,29 @@ def approve_committee(process_id: str):
         raise HTTPException(status_code=404, detail="תהליך לא נמצא")
     if process["status"] != "ממתין לוועדה":
         raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור ועדה")
-    return database.update_process_status(process_id, "אושר בוועדה", "green")
+    return database.activate_process(process_id)
+
+
+class RejectCommitteeInput(BaseModel):
+    final_rating: str
+
+
+@app.post("/api/approvals/{process_id}/reject-committee")
+def reject_committee(process_id: str, payload: RejectCommitteeInput):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "ממתין לוועדה":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור ועדה")
+    final_rating = payload.final_rating.strip()
+    if not final_rating:
+        raise HTTPException(status_code=422, detail="יש לבחור דירוג")
+    model_id = database.get_process_model_id(process_id)
+    structure = database.get_process_scoring_structure(process_id) if model_id else None
+    valid_labels = {lvl["label"] for lvl in (structure["rating_scale_levels"] if structure else [])}
+    if valid_labels and final_rating not in valid_labels:
+        raise HTTPException(status_code=422, detail="הדירוג שנבחר אינו חלק מסולם הדירוג של המודל")
+    return database.reject_committee_process(process_id, final_rating)
 
 
 @app.get("/api/report/rows/{process_id}")
@@ -332,8 +354,13 @@ class ProcessCreateInput(BaseModel):
 def create_process(payload: ProcessCreateInput):
     if payload.kind not in ("מנפיק", "נכס"):
         raise HTTPException(status_code=422, detail="סוג מסגרת לא תקין")
-    if not database.get_model(payload.model_id):
+    model = database.get_model(payload.model_id)
+    if not model:
         raise HTTPException(status_code=422, detail="מודל דירוג לא נמצא")
+    if model["status"] != "פעיל":
+        raise HTTPException(status_code=422, detail="ניתן לבחור רק מודל בסטטוס פעיל")
+    if model["questionnaires_count"] < 1:
+        raise HTTPException(status_code=422, detail="למודל הנבחר אין שאלונים מקושרים")
     if payload.kind == "מנפיק":
         if not payload.framework_issuer_id or not database.get_issuer(payload.framework_issuer_id):
             raise HTTPException(status_code=422, detail="יש לבחור מנפיק קיים")
@@ -350,6 +377,65 @@ def create_process(payload: ProcessCreateInput):
         framework_asset_id=framework_asset_id,
         data_date=payload.data_date,
     )
+
+
+@app.get("/api/processes/{process_id}/scoring")
+def get_process_scoring(process_id: str):
+    if not database.get_process(process_id):
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    structure = database.get_process_scoring_structure(process_id)
+    if not structure:
+        raise HTTPException(status_code=422, detail="לתהליך זה אין מודל דירוג משויך")
+    return structure
+
+
+class ProcessAnswerInput(BaseModel):
+    parameter_id: int
+    answer_id: Optional[int] = None
+    numeric_value: Optional[float] = None
+
+
+class ProcessStatusAction(BaseModel):
+    action: str
+
+
+PROCESS_STATUS_ACTIONS = {
+    "submit": ("בתהליך", "blue"),
+    "self_approve": ("ממתין לוועדה", "amber"),
+    "pause": ("מושהה", "amber"),
+    "cancel": ("בוטל", "red"),
+}
+PROCESS_TERMINAL_STATUSES = {"בוטל", "אושר בוועדה", "בתוקף"}
+
+
+@app.post("/api/processes/{process_id}/status-action")
+def apply_process_status_action(process_id: str, payload: ProcessStatusAction):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if payload.action not in PROCESS_STATUS_ACTIONS:
+        raise HTTPException(status_code=422, detail="פעולה לא תקינה")
+    if process["status"] in PROCESS_TERMINAL_STATUSES:
+        raise HTTPException(status_code=409, detail="לא ניתן לשנות סטטוס לתהליך שהושלם או בוטל")
+    status, tone = PROCESS_STATUS_ACTIONS[payload.action]
+    return database.update_process_status(process_id, status, tone)
+
+
+@app.put("/api/processes/{process_id}/answers")
+def save_process_answer(process_id: str, payload: ProcessAnswerInput):
+    if not database.get_process(process_id):
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if payload.answer_id is None and payload.numeric_value is None:
+        raise HTTPException(status_code=422, detail="יש לספק תשובה או ערך מספרי")
+    database.save_process_answer(
+        process_id,
+        payload.parameter_id,
+        answer_id=payload.answer_id,
+        numeric_value=payload.numeric_value,
+    )
+    result = database.compute_process_score(process_id)
+    database.save_process_computed_result(process_id, result["score"], result["rating"], result["completion"])
+    return result
 
 
 @app.get("/api/issuers")
@@ -561,6 +647,15 @@ def delete_model(model_id: str):
     database.delete_model(model_id)
 
 
+@app.patch("/api/models/{model_id}/status")
+def set_model_status(model_id: str, update: StatusUpdate):
+    if not database.get_model(model_id):
+        raise HTTPException(status_code=404, detail="מודל לא נמצא")
+    if update.status not in ("טיוטה", "פעיל"):
+        raise HTTPException(status_code=422, detail="סטטוס לא תקין")
+    return database.update_model_status(model_id, update.status)
+
+
 @app.get("/api/rating-scales")
 def get_rating_scales():
     rows = database.get_all_rating_scales()
@@ -697,6 +792,15 @@ def delete_questionnaire(questionnaire_id: str):
     if not database.get_questionnaire(questionnaire_id):
         raise HTTPException(status_code=404, detail="שאלון לא נמצא")
     database.delete_questionnaire(questionnaire_id)
+
+
+@app.patch("/api/questionnaires/{questionnaire_id}/status")
+def set_questionnaire_status(questionnaire_id: str, update: StatusUpdate):
+    if not database.get_questionnaire(questionnaire_id):
+        raise HTTPException(status_code=404, detail="שאלון לא נמצא")
+    if update.status not in ("טיוטה", "פעיל"):
+        raise HTTPException(status_code=422, detail="סטטוס לא תקין")
+    return database.update_questionnaire_status(questionnaire_id, update.status)
 
 
 @app.post("/api/questionnaires/{questionnaire_id}/duplicate", status_code=201)
