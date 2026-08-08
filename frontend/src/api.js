@@ -153,6 +153,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(role),
     }),
+  deleteRole: (id) => request(`/roles/${id}`, { method: "DELETE" }),
   getUsers: () => request("/users"),
   createUser: (user) =>
     request("/users", {

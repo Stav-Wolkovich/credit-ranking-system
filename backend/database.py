@@ -415,14 +415,6 @@ SEED_ROLE_ROWS = [
         "can_approve": True, "can_committee_approve": False, "can_rerun": False,
     },
     {
-        "id": "RATING_COMMITTEE",
-        "name": "חבר ועדת דירוג",
-        "name_en": "Rating Committee",
-        "description": "אישור סופי של דירוגים הדורשים אישור ועדה",
-        "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
-        "can_approve": False, "can_committee_approve": True, "can_rerun": False,
-    },
-    {
         "id": "RATING_ADMIN",
         "name": "מנהל דירוג",
         "name_en": "Rating Admin",
@@ -2880,6 +2872,14 @@ def update_role(
     conn.commit()
     conn.close()
     return get_role(id)
+
+
+def delete_role(role_id: str):
+    conn = get_connection()
+    conn.execute("DELETE FROM user_roles WHERE role_id = ?", (role_id,))
+    conn.execute("DELETE FROM roles WHERE id = ?", (role_id,))
+    conn.commit()
+    conn.close()
 
 
 def _attach_user_roles(conn, users):

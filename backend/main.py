@@ -869,6 +869,13 @@ def update_role(role_id: str, payload: RoleInput):
     return database.update_role(role_id, **cleaned)
 
 
+@app.delete("/api/roles/{role_id}", status_code=204)
+def delete_role(role_id: str):
+    if not database.get_role(role_id):
+        raise HTTPException(status_code=404, detail="תפקיד לא נמצא")
+    database.delete_role(role_id)
+
+
 @app.get("/api/users")
 def get_users():
     rows = database.get_all_users()
