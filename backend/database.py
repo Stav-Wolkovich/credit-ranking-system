@@ -58,7 +58,12 @@ of the type's shared configured address. Neither status is terminal —
 הגשה לאישور from the scoring modal resubmits either back to בתהליך.
 
 Issuers columns are the fields the issuers page displays: id (issuer
-code), name, type, sector, country, active.
+code), name, type, sector, country, active. active is a stored column
+on the table but not the source of truth returned by get_all_issuers()/
+get_issuer() — it's overwritten with a computed value: פעיל means the
+issuer currently has an active דירוג (a rankings row naming them
+subject_issuer_id, status בתוקף, and still within its approval_date+1yr
+validity window — see _attach_issuer_active()/_currently_valid_rankings()).
 
 Teams columns are the fields the teams page displays: id (team code),
 name, type, process_kind (the ranking process type the team runs, e.g.
@@ -67,7 +72,9 @@ active.
 
 Assets columns are the fields the assets page displays: id (asset
 code), name, type, issuer_id (the issuer that owns the asset), cycle_stage
-(בסיס / היתכנות, הקמה, הפעלה, or None), active. get_all_assets()/get_asset()
+(בסיס / היתכנות, הקמה, הפעלה, or None), active — computed the same way
+as issuers' (see above) but keyed off framework_asset_id instead of
+subject_issuer_id, via _attach_asset_active(). get_all_assets()/get_asset()
 additionally join in issuer_name from the matching issuers row.
 
 Models columns are the fields the models page displays: id (model
@@ -2188,11 +2195,45 @@ def save_process_computed_result(process_id: str, score: float | None, rating: s
     return get_process(process_id)
 
 
+def _currently_valid_rankings(conn):
+    """rankings rows whose status is בתוקף AND whose approval_date + 1yr
+    validity window (see get_all_rankings()) hasn't lapsed — status never
+    self-expires on its own, so 'בתוקף' alone isn't enough to mean
+    currently active."""
+    today = date.today()
+    rows = conn.execute(
+        "SELECT subject_issuer_id, framework_asset_id, approval_date FROM rankings "
+        "WHERE status = 'בתוקף' AND approval_date IS NOT NULL"
+    ).fetchall()
+    return [row for row in rows if _add_one_year(date.fromisoformat(row["approval_date"])) >= today]
+
+
+def _attach_issuer_active(conn, issuers):
+    """A מנפיק is פעיל when it currently has an active דירוג — a
+    currently-valid rankings row naming it as the subject, whether they
+    were rated directly or via an asset they own (both set
+    subject_issuer_id, see create_ranking_process())."""
+    active_ids = {row["subject_issuer_id"] for row in _currently_valid_rankings(conn) if row["subject_issuer_id"]}
+    for issuer in issuers:
+        issuer["active"] = issuer["id"] in active_ids
+    return issuers
+
+
+def _attach_asset_active(conn, assets):
+    """A נכס is פעיל when it currently has an active דירוג that used it
+    as the framework."""
+    active_ids = {row["framework_asset_id"] for row in _currently_valid_rankings(conn) if row["framework_asset_id"]}
+    for asset in assets:
+        asset["active"] = asset["id"] in active_ids
+    return assets
+
+
 def get_all_issuers():
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM issuers ORDER BY rowid ASC").fetchall()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM issuers ORDER BY rowid ASC").fetchall()]
+    _attach_issuer_active(conn, rows)
     conn.close()
-    return [{**dict(row), "active": bool(row["active"])} for row in rows]
+    return rows
 
 
 def count_issuers():
@@ -2205,8 +2246,13 @@ def count_issuers():
 def get_issuer(issuer_id: str):
     conn = get_connection()
     row = conn.execute("SELECT * FROM issuers WHERE id = ?", (issuer_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    issuer = dict(row)
+    _attach_issuer_active(conn, [issuer])
     conn.close()
-    return {**dict(row), "active": bool(row["active"])} if row else None
+    return issuer
 
 
 def issuer_code_taken(code: str, exclude_id: str | None = None):
@@ -2368,8 +2414,9 @@ def get_all_assets():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM assets ORDER BY rowid ASC").fetchall()]
     _attach_issuer_names(conn, rows)
+    _attach_asset_active(conn, rows)
     conn.close()
-    return [{**row, "active": bool(row["active"])} for row in rows]
+    return rows
 
 
 def count_assets():
@@ -2387,8 +2434,8 @@ def get_asset(asset_id: str):
         return None
     asset = dict(row)
     _attach_issuer_names(conn, [asset])
+    _attach_asset_active(conn, [asset])
     conn.close()
-    asset["active"] = bool(asset["active"])
     return asset
 
 
