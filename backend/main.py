@@ -134,6 +134,8 @@ class RatingScaleInput(BaseModel):
 class AnswerInput(BaseModel):
     text: str
     score: float = 0
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
 
 
 class ParameterInput(BaseModel):
@@ -803,7 +805,9 @@ def _clean_questionnaire_input(payload: QuestionnaireInput):
                 "type": p.type,
                 "weight": p.weight,
                 "answers": [
-                    {"text": a.text.strip(), "score": a.score} for a in p.answers if a.text.strip()
+                    {"text": a.text.strip(), "score": a.score, "min_value": a.min_value, "max_value": a.max_value}
+                    for a in p.answers
+                    if a.text.strip()
                 ],
                 "matrix_id": matrix_id,
             }

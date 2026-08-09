@@ -50,6 +50,12 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
     set("answers", answers);
   }
 
+  function updateAnswerRange(i, field, value) {
+    const answers = [...parameter.answers];
+    answers[i] = { ...answers[i], [field]: value };
+    set("answers", answers);
+  }
+
   function removeAnswer(i) {
     set(
       "answers",
@@ -58,7 +64,7 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
   }
 
   function addAnswer() {
-    set("answers", [...parameter.answers, { text: "", score: 0 }]);
+    set("answers", [...parameter.answers, { text: "", score: 0, min_value: 0, max_value: 0 }]);
   }
 
   return (
@@ -186,11 +192,21 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
             />
           </div>
 
-          {parameter.type === "סובייקטיבי" && (
+          {(parameter.type === "סובייקטיבי" || parameter.type === "כמותי") && (
             <div>
               <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
-                <div style={{ flex: 1, fontSize: 12, color: "var(--text-mid)" }}>תשובות</div>
-                <div style={{ width: 70, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>ציון</div>
+                <div style={{ flex: 1, fontSize: 12, color: "var(--text-mid)" }}>תיאור</div>
+                <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>ציון</div>
+                {parameter.type === "כמותי" && (
+                  <>
+                    <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                      מקסימום
+                    </div>
+                    <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                      מינימום
+                    </div>
+                  </>
+                )}
               </div>
               {parameter.answers.map((answer, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -221,7 +237,7 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                     onChange={(e) => updateAnswerScore(i, e.target.value)}
                     title="ציון — נמוך יותר = טוב יותר"
                     style={{
-                      width: 70,
+                      width: 60,
                       border: "1px solid var(--border)",
                       borderRadius: 6,
                       padding: "7px 8px",
@@ -229,6 +245,38 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                       textAlign: "center",
                     }}
                   />
+                  {parameter.type === "כמותי" && (
+                    <>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={answer.max_value ?? ""}
+                        onChange={(e) => updateAnswerRange(i, "max_value", e.target.value)}
+                        style={{
+                          width: 60,
+                          border: "1px solid var(--border)",
+                          borderRadius: 6,
+                          padding: "7px 8px",
+                          fontSize: 13,
+                          textAlign: "center",
+                        }}
+                      />
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={answer.min_value ?? ""}
+                        onChange={(e) => updateAnswerRange(i, "min_value", e.target.value)}
+                        style={{
+                          width: 60,
+                          border: "1px solid var(--border)",
+                          borderRadius: 6,
+                          padding: "7px 8px",
+                          fontSize: 13,
+                          textAlign: "center",
+                        }}
+                      />
+                    </>
+                  )}
                   <span style={{ fontSize: 12, color: "var(--text-light)", minWidth: 16, textAlign: "center" }}>
                     {i + 1}
                   </span>
@@ -247,7 +295,7 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                   padding: "4px 0",
                 }}
               >
-                + הוסף תשובה
+                {parameter.type === "כמותי" ? "+ הוסף טווח" : "+ הוסף תשובה"}
               </button>
             </div>
           )}
@@ -339,7 +387,12 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
         type: p.type,
         weight: Number(p.weight) || 0,
         answers: p.answers
-          .map((a) => ({ text: a.text.trim(), score: Number(a.score) || 0 }))
+          .map((a) => ({
+            text: a.text.trim(),
+            score: Number(a.score) || 0,
+            min_value: a.min_value === "" || a.min_value == null ? null : Number(a.min_value),
+            max_value: a.max_value === "" || a.max_value == null ? null : Number(a.max_value),
+          }))
           .filter((a) => a.text),
         matrix_id: p.type === "מטריצה" ? p.matrix_id || null : null,
       })),

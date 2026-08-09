@@ -11,6 +11,11 @@ function isParameterAnswered(p) {
   return a.answer_id != null || a.numeric_value != null;
 }
 
+function rangeLabel(a) {
+  if (a.min_value == null && a.max_value == null) return null;
+  return `${a.min_value ?? "-"}–${a.max_value ?? "-"}`;
+}
+
 function countAnswered(questionnaires) {
   let total = 0;
   let answered = 0;
@@ -33,6 +38,8 @@ function matrixCellScore(matrix, x, y) {
 
 function ParameterField({ parameter, onAnswer, saving }) {
   const isSubjective = parameter.type === "סובייקטיבי";
+  const isQuant = parameter.type === "כמותי";
+  const isChoiceList = isSubjective || isQuant;
   const isMatrix = parameter.type === "מטריצה";
   const [numericDraft, setNumericDraft] = useState(
     parameter.current_answer?.numeric_value ?? ""
@@ -53,7 +60,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
         <span style={{ fontSize: 11.5, color: "var(--text-light)" }}>משקל {parameter.weight}%</span>
       </div>
 
-      {isSubjective ? (
+      {isChoiceList ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {parameter.answers.map((a) => (
             <label
@@ -77,6 +84,11 @@ function ParameterField({ parameter, onAnswer, saving }) {
                 onChange={() => onAnswer({ answer_id: a.id })}
               />
               <span style={{ flex: 1 }}>{a.text}</span>
+              {isQuant && rangeLabel(a) && (
+                <span style={{ color: "var(--text-light)", fontSize: 11 }} dir="ltr">
+                  {rangeLabel(a)}
+                </span>
+              )}
               <span style={{ color: "var(--text-light)", fontSize: 11 }} dir="ltr">
                 ציון: {a.score}
               </span>

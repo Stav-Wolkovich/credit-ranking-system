@@ -25,7 +25,7 @@ function matrixCellScore(matrix, x, y) {
 function answeredText(parameter) {
   const answer = parameter.current_answer;
   if (!answer) return null;
-  if (parameter.type === "סובייקטיבי") {
+  if (parameter.type === "סובייקטיבי" || parameter.type === "כמותי") {
     if (answer.answer_id == null) return null;
     const matching = parameter.answers.find((a) => a.id === answer.answer_id);
     return matching ? { text: matching.text, score: matching.score } : null;

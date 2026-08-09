@@ -100,12 +100,18 @@ questionnaire_parameters holds the scoring parameters that make up a
 questionnaire (questionnaire_id, name, type, weight, position).
 parameter_answers holds the ranked answer options for a parameter
 (parameter_id, text, position, score — lower is better, matching the
-rating scale's direction). score is set per-answer directly in the
-questionnaire editor (ניהול שאלונים); any answer saved without one
-falls back to a (position - 1) * 0.5 default (see the backfill in
-init_db()). Subjective (סובייקטיבי) parameters are answered by picking
-one of these; objective (אובייקטיבי) parameters have no answer options
-and take a direct numeric score instead.
+rating scale's direction — plus min_value/max_value for כמותי
+parameters, a numeric range the text describes, e.g. "10-15%"). score
+is set per-answer directly in the questionnaire editor (ניהול
+שאלונים); any answer saved without one falls back to a
+(position - 1) * 0.5 default (see the backfill in init_db()).
+Subjective (סובייקטיבי) parameters are answered by picking one of
+these; quantitative (כמותי) parameters are answered the same way —
+picking whichever range the real value falls into — min_value/max_value
+are shown for reference but never compared against a raw input, so
+ranges can overlap or gap without breaking anything. Objective
+(אובייקטיבי) parameters have no answer options and take a direct
+numeric score instead.
 
 process_answers holds what was actually answered for a ranking process
 (process_id, parameter_id, answer_id — for subjective — numeric_value —
@@ -1125,13 +1131,18 @@ def init_db():
             parameter_id INTEGER NOT NULL REFERENCES questionnaire_parameters(id),
             text TEXT NOT NULL,
             position INTEGER NOT NULL DEFAULT 0,
-            score REAL
+            score REAL,
+            min_value REAL,
+            max_value REAL
         )
         """
     )
     answer_columns = {row["name"] for row in conn.execute("PRAGMA table_info(parameter_answers)").fetchall()}
     if "score" not in answer_columns:
         conn.execute("ALTER TABLE parameter_answers ADD COLUMN score REAL")
+    for col in ("min_value", "max_value"):
+        if col not in answer_columns:
+            conn.execute(f"ALTER TABLE parameter_answers ADD COLUMN {col} REAL")
     parameter_count = conn.execute("SELECT COUNT(*) FROM questionnaire_parameters").fetchone()[0]
     if parameter_count == 0:
         for position, param in enumerate(SEED_PARAMETER_ROWS, start=1):
@@ -1964,7 +1975,7 @@ def get_process_scoring_structure(process_id: str):
         parameters = []
         for p in param_rows:
             answer_rows = conn.execute(
-                "SELECT id, text, score FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
+                "SELECT id, text, score, min_value, max_value FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
                 (p["id"],),
             ).fetchall()
             matrix = None
@@ -1979,7 +1990,16 @@ def get_process_scoring_structure(process_id: str):
                     "name": p["name"],
                     "type": p["type"],
                     "weight": p["weight"],
-                    "answers": [{"id": a["id"], "text": a["text"], "score": a["score"]} for a in answer_rows],
+                    "answers": [
+                        {
+                            "id": a["id"],
+                            "text": a["text"],
+                            "score": a["score"],
+                            "min_value": a["min_value"],
+                            "max_value": a["max_value"],
+                        }
+                        for a in answer_rows
+                    ],
                     "matrix_id": p["matrix_id"],
                     "matrix": matrix,
                     "current_answer": saved_answers.get(p["id"]),
@@ -2119,7 +2139,7 @@ def compute_process_score(process_id: str):
             answer = p["current_answer"]
             score = None
             if answer:
-                if p["type"] == "סובייקטיבי" and answer.get("answer_id") is not None:
+                if p["type"] in ("סובייקטיבי", "כמותי") and answer.get("answer_id") is not None:
                     matching = next((a for a in p["answers"] if a["id"] == answer["answer_id"]), None)
                     score = matching["score"] if matching else None
                 elif p["type"] == "מטריצה" and answer.get("matrix_x") and answer.get("matrix_y"):
@@ -2735,7 +2755,7 @@ def _get_parameters_with_answers(conn, questionnaire_id: str):
     parameters = []
     for p in param_rows:
         answer_rows = conn.execute(
-            "SELECT text, score FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
+            "SELECT text, score, min_value, max_value FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
             (p["id"],),
         ).fetchall()
         parameters.append(
@@ -2743,7 +2763,10 @@ def _get_parameters_with_answers(conn, questionnaire_id: str):
                 "name": p["name"],
                 "type": p["type"],
                 "weight": p["weight"],
-                "answers": [{"text": a["text"], "score": a["score"]} for a in answer_rows],
+                "answers": [
+                    {"text": a["text"], "score": a["score"], "min_value": a["min_value"], "max_value": a["max_value"]}
+                    for a in answer_rows
+                ],
                 "matrix_id": p["matrix_id"],
             }
         )
@@ -2808,8 +2831,12 @@ def _replace_questionnaire_parameters(conn, questionnaire_id: str, parameters: l
         answers = param.get("answers") or []
         if answers:
             conn.executemany(
-                "INSERT INTO parameter_answers (parameter_id, text, position, score) VALUES (?, ?, ?, ?)",
-                [(param_id, a["text"], i, a.get("score")) for i, a in enumerate(answers, start=1)],
+                "INSERT INTO parameter_answers (parameter_id, text, position, score, min_value, max_value) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (param_id, a["text"], i, a.get("score"), a.get("min_value"), a.get("max_value"))
+                    for i, a in enumerate(answers, start=1)
+                ],
             )
 
 
