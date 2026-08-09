@@ -38,9 +38,15 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
     onChange({ ...parameter, [field]: value });
   }
 
-  function updateAnswer(i, text) {
+  function updateAnswerText(i, text) {
     const answers = [...parameter.answers];
-    answers[i] = text;
+    answers[i] = { ...answers[i], text };
+    set("answers", answers);
+  }
+
+  function updateAnswerScore(i, score) {
+    const answers = [...parameter.answers];
+    answers[i] = { ...answers[i], score };
     set("answers", answers);
   }
 
@@ -52,7 +58,7 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
   }
 
   function addAnswer() {
-    set("answers", [...parameter.answers, ""]);
+    set("answers", [...parameter.answers, { text: "", score: 0 }]);
   }
 
   return (
@@ -182,7 +188,10 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
 
           {parameter.type === "סובייקטיבי" && (
             <div>
-              <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 4 }}>תשובות</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <div style={{ flex: 1, fontSize: 12, color: "var(--text-mid)" }}>תשובות</div>
+                <div style={{ width: 70, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>ציון</div>
+              </div>
               {parameter.answers.map((answer, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <button
@@ -195,14 +204,29 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                   </button>
                   <input
                     type="text"
-                    value={answer}
-                    onChange={(e) => updateAnswer(i, e.target.value)}
+                    value={answer.text}
+                    onChange={(e) => updateAnswerText(i, e.target.value)}
                     style={{
                       flex: 1,
                       border: "1px solid var(--border)",
                       borderRadius: 6,
                       padding: "7px 10px",
                       fontSize: 13,
+                    }}
+                  />
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={answer.score}
+                    onChange={(e) => updateAnswerScore(i, e.target.value)}
+                    title="ציון — נמוך יותר = טוב יותר"
+                    style={{
+                      width: 70,
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      padding: "7px 8px",
+                      fontSize: 13,
+                      textAlign: "center",
                     }}
                   />
                   <span style={{ fontSize: 12, color: "var(--text-light)", minWidth: 16, textAlign: "center" }}>
@@ -314,7 +338,9 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
         name: p.name.trim(),
         type: p.type,
         weight: Number(p.weight) || 0,
-        answers: p.answers.map((a) => a.trim()).filter(Boolean),
+        answers: p.answers
+          .map((a) => ({ text: a.text.trim(), score: Number(a.score) || 0 }))
+          .filter((a) => a.text),
         matrix_id: p.type === "מטריצה" ? p.matrix_id || null : null,
       })),
     };

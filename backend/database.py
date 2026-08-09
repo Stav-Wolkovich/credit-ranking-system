@@ -100,9 +100,12 @@ questionnaire_parameters holds the scoring parameters that make up a
 questionnaire (questionnaire_id, name, type, weight, position).
 parameter_answers holds the ranked answer options for a parameter
 (parameter_id, text, position, score — lower is better, matching the
-rating scale's direction). Subjective (סובייקטיבי) parameters are
-answered by picking one of these; objective (אובייקטיבי) parameters
-have no answer options and take a direct numeric score instead.
+rating scale's direction). score is set per-answer directly in the
+questionnaire editor (ניהול שאלונים); any answer saved without one
+falls back to a (position - 1) * 0.5 default (see the backfill in
+init_db()). Subjective (סובייקטיבי) parameters are answered by picking
+one of these; objective (אובייקטיבי) parameters have no answer options
+and take a direct numeric score instead.
 
 process_answers holds what was actually answered for a ranking process
 (process_id, parameter_id, answer_id — for subjective — numeric_value —
@@ -2732,7 +2735,7 @@ def _get_parameters_with_answers(conn, questionnaire_id: str):
     parameters = []
     for p in param_rows:
         answer_rows = conn.execute(
-            "SELECT text FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
+            "SELECT text, score FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
             (p["id"],),
         ).fetchall()
         parameters.append(
@@ -2740,7 +2743,7 @@ def _get_parameters_with_answers(conn, questionnaire_id: str):
                 "name": p["name"],
                 "type": p["type"],
                 "weight": p["weight"],
-                "answers": [a["text"] for a in answer_rows],
+                "answers": [{"text": a["text"], "score": a["score"]} for a in answer_rows],
                 "matrix_id": p["matrix_id"],
             }
         )
@@ -2805,8 +2808,8 @@ def _replace_questionnaire_parameters(conn, questionnaire_id: str, parameters: l
         answers = param.get("answers") or []
         if answers:
             conn.executemany(
-                "INSERT INTO parameter_answers (parameter_id, text, position) VALUES (?, ?, ?)",
-                [(param_id, text, i) for i, text in enumerate(answers, start=1)],
+                "INSERT INTO parameter_answers (parameter_id, text, position, score) VALUES (?, ?, ?, ?)",
+                [(param_id, a["text"], i, a.get("score")) for i, a in enumerate(answers, start=1)],
             )
 
 

@@ -131,11 +131,16 @@ class RatingScaleInput(BaseModel):
     levels: List[RatingScaleLevelInput] = []
 
 
+class AnswerInput(BaseModel):
+    text: str
+    score: float = 0
+
+
 class ParameterInput(BaseModel):
     name: str
     type: str
     weight: int = 0
-    answers: List[str] = []
+    answers: List[AnswerInput] = []
     matrix_id: Optional[str] = None
 
 
@@ -797,7 +802,9 @@ def _clean_questionnaire_input(payload: QuestionnaireInput):
                 "name": p.name.strip(),
                 "type": p.type,
                 "weight": p.weight,
-                "answers": [a.strip() for a in p.answers if a.strip()],
+                "answers": [
+                    {"text": a.text.strip(), "score": a.score} for a in p.answers if a.text.strip()
+                ],
                 "matrix_id": matrix_id,
             }
         )
