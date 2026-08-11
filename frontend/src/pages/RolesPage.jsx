@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
-import { PageHeader, ErrorBanner } from "../components/ui.jsx";
+import { PageHeader, ErrorBanner, ConfirmDialog } from "../components/ui.jsx";
 import RoleModal from "../components/RoleModal.jsx";
 import { FilterableTableHead } from "../components/FilterableTh.jsx";
 import { useColumnFilters } from "../hooks/useColumnFilters.js";
@@ -23,7 +23,7 @@ const COLUMNS = [
   { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
 ];
 
-const COLUMN_WIDTHS = [170, 150, 300, ...PERMISSION_COLUMNS.map(() => 90), 70];
+const COLUMN_WIDTHS = [170, 150, 300, ...PERMISSION_COLUMNS.map(() => 90), 90];
 
 function PermissionMark({ granted }) {
   return (
@@ -38,6 +38,7 @@ export default function RolesPage() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const loadRoles = useCallback(() => {
     setLoading(true);
@@ -55,6 +56,15 @@ export default function RolesPage() {
   const rows = data?.rows ?? [];
   const filterState = useColumnFilters(rows, COLUMNS);
   const { search, setSearch, filteredRows } = filterState;
+
+  function confirmDelete() {
+    const role = deleteTarget;
+    setDeleteTarget(null);
+    api
+      .deleteRole(role.id)
+      .then(() => loadRoles())
+      .catch((err) => setError(err.message));
+  }
 
   return (
     <div>
@@ -135,7 +145,7 @@ export default function RolesPage() {
                     <PermissionMark granted={r[p.key]} />
                   </td>
                 ))}
-                <td style={{ padding: "12px 16px" }}>
+                <td style={{ padding: "12px 16px", display: "flex", gap: 10 }}>
                   <button
                     type="button"
                     onClick={() => setModal({ mode: "edit", role: r })}
@@ -143,6 +153,14 @@ export default function RolesPage() {
                     style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-mid)" }}
                   >
                     ✎
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(r)}
+                    aria-label="מחיקה"
+                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
+                  >
+                    🗑
                   </button>
                 </td>
               </tr>
@@ -160,6 +178,15 @@ export default function RolesPage() {
             setModal(null);
             loadRoles();
           }}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="מחיקה"
+          message={`למחוק את התפקיד "${deleteTarget.name}"?`}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={confirmDelete}
         />
       )}
     </div>

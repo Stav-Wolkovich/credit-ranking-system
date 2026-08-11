@@ -32,8 +32,10 @@ export default function UserModal({ mode, initial, onCancel, onSaved }) {
     id: initial?.id ?? "",
     full_name: initial?.full_name ?? "",
     email: initial?.email ?? "",
+    team_id: initial?.team_id ?? "",
   });
   const [roles, setRoles] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [selectedRoleIds, setSelectedRoleIds] = useState(() => new Set(initial?.role_ids ?? []));
   const [fieldErrors, setFieldErrors] = useState(new Set());
   const [error, setError] = useState(null);
@@ -43,6 +45,10 @@ export default function UserModal({ mode, initial, onCancel, onSaved }) {
     api
       .getRoles()
       .then((res) => setRoles(res.rows))
+      .catch((err) => setError(err.message));
+    api
+      .getTeams()
+      .then((res) => setTeams(res.rows))
       .catch((err) => setError(err.message));
   }, []);
 
@@ -76,6 +82,7 @@ export default function UserModal({ mode, initial, onCancel, onSaved }) {
       full_name: form.full_name.trim(),
       email: form.email.trim() || null,
       role_ids: Array.from(selectedRoleIds),
+      team_id: form.team_id || null,
     };
     try {
       const saved =
@@ -146,6 +153,29 @@ export default function UserModal({ mode, initial, onCancel, onSaved }) {
           <div style={{ fontSize: 11.5, color: "#b52d2d", marginTop: -10, marginBottom: 10 }}>⚠ שדה חובה</div>
         )}
         <Field label="אימייל" type="email" value={form.email} onChange={set("email")} />
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>צוות</div>
+          <select
+            value={form.team_id}
+            onChange={set("team_id")}
+            style={{
+              width: "100%",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "9px 12px",
+              fontSize: 13,
+              background: "#fff",
+            }}
+          >
+            <option value="">–</option>
+            {teams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 8 }}>תפקידים</div>
         <div style={{ marginBottom: 6 }}>

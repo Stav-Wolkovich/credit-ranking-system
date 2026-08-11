@@ -31,16 +31,28 @@ function Field({ label, required, invalid, disabled, value, onChange }) {
   );
 }
 
-function ParameterEditor({ parameter, onChange, onRemove }) {
+function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemove }) {
   const [expanded, setExpanded] = useState(false);
 
   function set(field, value) {
     onChange({ ...parameter, [field]: value });
   }
 
-  function updateAnswer(i, text) {
+  function updateAnswerText(i, text) {
     const answers = [...parameter.answers];
-    answers[i] = text;
+    answers[i] = { ...answers[i], text };
+    set("answers", answers);
+  }
+
+  function updateAnswerScore(i, score) {
+    const answers = [...parameter.answers];
+    answers[i] = { ...answers[i], score };
+    set("answers", answers);
+  }
+
+  function updateAnswerRange(i, field, value) {
+    const answers = [...parameter.answers];
+    answers[i] = { ...answers[i], [field]: value };
     set("answers", answers);
   }
 
@@ -52,7 +64,7 @@ function ParameterEditor({ parameter, onChange, onRemove }) {
   }
 
   function addAnswer() {
-    set("answers", [...parameter.answers, ""]);
+    set("answers", [...parameter.answers, { text: "", score: 0, min_value: 0, max_value: 0 }]);
   }
 
   return (
@@ -120,6 +132,34 @@ function ParameterEditor({ parameter, onChange, onRemove }) {
             </select>
           </div>
 
+          {parameter.type === "מטריצה" && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 4 }}>מטריצה *</div>
+              {matrixInvalid && (
+                <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ יש לבחור מטריצה</div>
+              )}
+              <select
+                value={parameter.matrix_id ?? ""}
+                onChange={(e) => set("matrix_id", e.target.value || null)}
+                style={{
+                  width: "100%",
+                  border: `1px solid ${matrixInvalid ? "#e0a0a0" : "var(--border)"}`,
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  fontSize: 13,
+                  background: "#fff",
+                }}
+              >
+                <option value="">בחר מטריצה</option>
+                {matrices.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} ({m.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 4 }}>משקל (%)</div>
             <input
@@ -152,9 +192,22 @@ function ParameterEditor({ parameter, onChange, onRemove }) {
             />
           </div>
 
-          {parameter.type === "סובייקטיבי" && (
+          {(parameter.type === "סובייקטיבי" || parameter.type === "כמותי") && (
             <div>
-              <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 4 }}>תשובות</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <div style={{ flex: 1, fontSize: 12, color: "var(--text-mid)" }}>תיאור</div>
+                <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>ציון</div>
+                {parameter.type === "כמותי" && (
+                  <>
+                    <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                      מקסימום
+                    </div>
+                    <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                      מינימום
+                    </div>
+                  </>
+                )}
+              </div>
               {parameter.answers.map((answer, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <button
@@ -167,8 +220,8 @@ function ParameterEditor({ parameter, onChange, onRemove }) {
                   </button>
                   <input
                     type="text"
-                    value={answer}
-                    onChange={(e) => updateAnswer(i, e.target.value)}
+                    value={answer.text}
+                    onChange={(e) => updateAnswerText(i, e.target.value)}
                     style={{
                       flex: 1,
                       border: "1px solid var(--border)",
@@ -177,6 +230,53 @@ function ParameterEditor({ parameter, onChange, onRemove }) {
                       fontSize: 13,
                     }}
                   />
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={answer.score}
+                    onChange={(e) => updateAnswerScore(i, e.target.value)}
+                    title="ציון — נמוך יותר = טוב יותר"
+                    style={{
+                      width: 60,
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      padding: "7px 8px",
+                      fontSize: 13,
+                      textAlign: "center",
+                    }}
+                  />
+                  {parameter.type === "כמותי" && (
+                    <>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={answer.max_value ?? ""}
+                        onChange={(e) => updateAnswerRange(i, "max_value", e.target.value)}
+                        style={{
+                          width: 60,
+                          border: "1px solid var(--border)",
+                          borderRadius: 6,
+                          padding: "7px 8px",
+                          fontSize: 13,
+                          textAlign: "center",
+                        }}
+                      />
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={answer.min_value ?? ""}
+                        onChange={(e) => updateAnswerRange(i, "min_value", e.target.value)}
+                        style={{
+                          width: 60,
+                          border: "1px solid var(--border)",
+                          borderRadius: 6,
+                          padding: "7px 8px",
+                          fontSize: 13,
+                          textAlign: "center",
+                        }}
+                      />
+                    </>
+                  )}
                   <span style={{ fontSize: 12, color: "var(--text-light)", minWidth: 16, textAlign: "center" }}>
                     {i + 1}
                   </span>
@@ -195,7 +295,7 @@ function ParameterEditor({ parameter, onChange, onRemove }) {
                   padding: "4px 0",
                 }}
               >
-                + הוסף תשובה
+                {parameter.type === "כמותי" ? "+ הוסף טווח" : "+ הוסף תשובה"}
               </button>
             </div>
           )}
@@ -213,10 +313,19 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
     description: initial?.description ?? "",
   });
   const [parameters, setParameters] = useState([]);
+  const [matrices, setMatrices] = useState([]);
   const [loading, setLoading] = useState(mode === "edit");
   const [fieldErrors, setFieldErrors] = useState(new Set());
+  const [matrixErrors, setMatrixErrors] = useState(new Set());
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api
+      .getMatrices()
+      .then((res) => setMatrices(res.rows.filter((m) => m.type === "רשת 2D")))
+      .catch((err) => setError(err.message));
+  }, []);
 
   useEffect(() => {
     if (mode === "edit" && initial?.id) {
@@ -241,7 +350,7 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
   const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
 
   function addParameter() {
-    setParameters((prev) => [...prev, { name: "", type: "סובייקטיבי", weight: 0, answers: [] }]);
+    setParameters((prev) => [...prev, { name: "", type: "סובייקטיבי", weight: 0, answers: [], matrix_id: null }]);
   }
 
   function updateParameter(index, next) {
@@ -257,7 +366,11 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
     if (!form.id.trim()) missing.add("id");
     if (!form.name.trim()) missing.add("name");
     setFieldErrors(missing);
-    return missing.size === 0;
+    const missingMatrix = new Set(
+      parameters.map((p, i) => (p.type === "מטריצה" && !p.matrix_id ? i : null)).filter((i) => i !== null)
+    );
+    setMatrixErrors(missingMatrix);
+    return missing.size === 0 && missingMatrix.size === 0;
   }
 
   async function handleSave() {
@@ -273,7 +386,15 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
         name: p.name.trim(),
         type: p.type,
         weight: Number(p.weight) || 0,
-        answers: p.answers.map((a) => a.trim()).filter(Boolean),
+        answers: p.answers
+          .map((a) => ({
+            text: a.text.trim(),
+            score: Number(a.score) || 0,
+            min_value: a.min_value === "" || a.min_value == null ? null : Number(a.min_value),
+            max_value: a.max_value === "" || a.max_value == null ? null : Number(a.max_value),
+          }))
+          .filter((a) => a.text),
+        matrix_id: p.type === "מטריצה" ? p.matrix_id || null : null,
       })),
     };
     try {
@@ -402,6 +523,8 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
               <ParameterEditor
                 key={i}
                 parameter={p}
+                matrices={matrices}
+                matrixInvalid={matrixErrors.has(i)}
                 onChange={(next) => updateParameter(i, next)}
                 onRemove={() => removeParameter(i)}
               />

@@ -4,25 +4,54 @@ import { Badge, ConfirmDialog } from "./ui.jsx";
 
 const PROCESS_TERMINAL_STATUSES = new Set(["בוטל", "אושר בוועדה", "בתוקף"]);
 
+function isParameterAnswered(p) {
+  const a = p.current_answer;
+  if (!a) return false;
+  if (p.type === "מטריצה") return a.matrix_x != null && a.matrix_y != null;
+  return a.answer_id != null || a.numeric_value != null;
+}
+
+function rangeLabel(a) {
+  if (a.min_value == null && a.max_value == null) return null;
+  return `${a.min_value ?? "-"}–${a.max_value ?? "-"}`;
+}
+
 function countAnswered(questionnaires) {
   let total = 0;
   let answered = 0;
   questionnaires.forEach((q) => {
     q.parameters.forEach((p) => {
       total += 1;
-      if (p.current_answer && (p.current_answer.answer_id != null || p.current_answer.numeric_value != null)) {
-        answered += 1;
-      }
+      if (isParameterAnswered(p)) answered += 1;
     });
   });
   return { total, answered };
 }
 
+function matrixCellScore(matrix, x, y) {
+  if (!matrix || !matrix.cell_values || x == null || y == null) return null;
+  const xIndex = matrix.x_values.indexOf(x);
+  const yIndex = matrix.y_values.indexOf(y);
+  if (xIndex === -1 || yIndex === -1) return null;
+  return matrix.cell_values[yIndex]?.[xIndex] ?? null;
+}
+
 function ParameterField({ parameter, onAnswer, saving }) {
   const isSubjective = parameter.type === "סובייקטיבי";
+  const isQuant = parameter.type === "כמותי";
+  const isChoiceList = isSubjective || isQuant;
+  const isMatrix = parameter.type === "מטריצה";
   const [numericDraft, setNumericDraft] = useState(
     parameter.current_answer?.numeric_value ?? ""
   );
+  const [matrixX, setMatrixX] = useState(parameter.current_answer?.matrix_x ?? "");
+  const [matrixY, setMatrixY] = useState(parameter.current_answer?.matrix_y ?? "");
+
+  function handleMatrixChange(nextX, nextY) {
+    setMatrixX(nextX);
+    setMatrixY(nextY);
+    if (nextX && nextY) onAnswer({ matrix_x: nextX, matrix_y: nextY });
+  }
 
   return (
     <div style={{ borderTop: "1px solid var(--border)", padding: "12px 0" }}>
@@ -31,7 +60,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
         <span style={{ fontSize: 11.5, color: "var(--text-light)" }}>משקל {parameter.weight}%</span>
       </div>
 
-      {isSubjective ? (
+      {isChoiceList ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {parameter.answers.map((a) => (
             <label
@@ -55,11 +84,102 @@ function ParameterField({ parameter, onAnswer, saving }) {
                 onChange={() => onAnswer({ answer_id: a.id })}
               />
               <span style={{ flex: 1 }}>{a.text}</span>
+              {isQuant && rangeLabel(a) && (
+                <span style={{ color: "var(--text-light)", fontSize: 11 }} dir="ltr">
+                  {rangeLabel(a)}
+                </span>
+              )}
               <span style={{ color: "var(--text-light)", fontSize: 11 }} dir="ltr">
                 ציון: {a.score}
               </span>
             </label>
           ))}
+        </div>
+      ) : isMatrix ? (
+        <div>
+          {!parameter.matrix ? (
+            <div style={{ fontSize: 12.5, color: "var(--text-light)" }}>למטריצה של פרמטר זה אין רשת ערכים.</div>
+          ) : (
+            <div style={{ overflowX: "auto" }} dir="ltr">
+              <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <th
+                      style={{
+                        border: "1px solid var(--border)",
+                        padding: "6px 10px",
+                        background: "#f2f3f5",
+                        fontSize: 10.5,
+                        color: "var(--text-mid)",
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <div>{parameter.matrix.x_axis_label || "ציר X"} →</div>
+                      <div>{parameter.matrix.y_axis_label || "ציר Y"} ↓</div>
+                    </th>
+                    {parameter.matrix.x_values.map((x) => (
+                      <th
+                        key={x}
+                        style={{
+                          border: "1px solid var(--border)",
+                          padding: "6px 10px",
+                          background: "#f2f3f5",
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {x}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {parameter.matrix.y_values.map((y, yi) => (
+                    <tr key={y}>
+                      <th
+                        style={{
+                          border: "1px solid var(--border)",
+                          padding: "6px 10px",
+                          background: "#f2f3f5",
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {y}
+                      </th>
+                      {parameter.matrix.x_values.map((x, xi) => {
+                        const selected = matrixX === x && matrixY === y;
+                        return (
+                          <td
+                            key={x}
+                            onClick={() => !saving && handleMatrixChange(x, y)}
+                            style={{
+                              border: selected ? "2px solid var(--accent)" : "1px solid var(--border)",
+                              padding: "6px 10px",
+                              textAlign: "center",
+                              background: selected ? "#e8f0fe" : "#fff",
+                              color: selected ? "var(--accent)" : "var(--text-dark)",
+                              fontWeight: selected ? 700 : 400,
+                              cursor: saving ? "default" : "pointer",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {parameter.matrix.cell_values[yi]?.[xi]}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {matrixX && matrixY && (
+                <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginTop: 6 }}>
+                  {matrixY} / {matrixX} — ציון: {matrixCellScore(parameter.matrix, matrixX, matrixY) ?? "-"}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -272,6 +392,22 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                   <div style={{ fontSize: 11, color: "#1e7e3c", marginTop: 4, fontWeight: 600 }}>✓ הדירוג הושלם</div>
                 )}
               </div>
+
+              {process.rejection_comment && (
+                <div
+                  style={{
+                    border: "1px solid #f3c9c9",
+                    background: "#fbe9e9",
+                    borderRadius: 8,
+                    padding: "10px 14px",
+                  }}
+                >
+                  <div style={{ fontSize: 11.5, color: "#b52d2d", fontWeight: 700, marginBottom: 4 }}>
+                    {process.status === "הוחזר" ? "הערת החזרה ממנהל" : "הערת דחייה מוועדה"}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: "var(--text-dark)" }}>{process.rejection_comment}</div>
+                </div>
+              )}
 
               {process.final_rating && (
                 <div

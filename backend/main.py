@@ -131,11 +131,19 @@ class RatingScaleInput(BaseModel):
     levels: List[RatingScaleLevelInput] = []
 
 
+class AnswerInput(BaseModel):
+    text: str
+    score: float = 0
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+
+
 class ParameterInput(BaseModel):
     name: str
     type: str
     weight: int = 0
-    answers: List[str] = []
+    answers: List[AnswerInput] = []
+    matrix_id: Optional[str] = None
 
 
 class QuestionnaireInput(BaseModel):
@@ -170,6 +178,7 @@ class UserInput(BaseModel):
     full_name: str
     email: Optional[str] = None
     role_ids: List[str] = []
+    team_id: Optional[str] = None
 
 
 class MatrixInput(BaseModel):
@@ -284,6 +293,23 @@ def approve_manager(process_id: str):
     return database.update_process_status(process_id, "ממתין לוועדה", "amber")
 
 
+class RejectManagerInput(BaseModel):
+    comment: str
+
+
+@app.post("/api/approvals/{process_id}/reject-manager")
+def reject_manager(process_id: str, payload: RejectManagerInput):
+    process = database.get_process(process_id)
+    if not process:
+        raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] != "בתהליך":
+        raise HTTPException(status_code=409, detail="התהליך אינו ממתין לאישור מנהל")
+    comment = payload.comment.strip()
+    if not comment:
+        raise HTTPException(status_code=422, detail="יש להזין הערה")
+    return database.reject_manager_process(process_id, comment)
+
+
 @app.post("/api/approvals/{process_id}/approve-committee")
 def approve_committee(process_id: str):
     process = database.get_process(process_id)
@@ -296,6 +322,7 @@ def approve_committee(process_id: str):
 
 class RejectCommitteeInput(BaseModel):
     final_rating: str
+    comment: str
 
 
 @app.post("/api/approvals/{process_id}/reject-committee")
@@ -308,12 +335,15 @@ def reject_committee(process_id: str, payload: RejectCommitteeInput):
     final_rating = payload.final_rating.strip()
     if not final_rating:
         raise HTTPException(status_code=422, detail="יש לבחור דירוג")
+    comment = payload.comment.strip()
+    if not comment:
+        raise HTTPException(status_code=422, detail="יש להזין הערה")
     model_id = database.get_process_model_id(process_id)
     structure = database.get_process_scoring_structure(process_id) if model_id else None
     valid_labels = {lvl["label"] for lvl in (structure["rating_scale_levels"] if structure else [])}
     if valid_labels and final_rating not in valid_labels:
         raise HTTPException(status_code=422, detail="הדירוג שנבחר אינו חלק מסולם הדירוג של המודל")
-    return database.reject_committee_process(process_id, final_rating)
+    return database.reject_committee_process(process_id, final_rating, comment)
 
 
 @app.get("/api/report/rows/{process_id}")
@@ -348,6 +378,7 @@ class ProcessCreateInput(BaseModel):
     framework_issuer_id: Optional[str] = None
     framework_asset_id: Optional[str] = None
     data_date: Optional[str] = None
+    owner: str
 
 
 @app.post("/api/processes", status_code=201)
@@ -361,6 +392,8 @@ def create_process(payload: ProcessCreateInput):
         raise HTTPException(status_code=422, detail="ניתן לבחור רק מודל בסטטוס פעיל")
     if model["questionnaires_count"] < 1:
         raise HTTPException(status_code=422, detail="למודל הנבחר אין שאלונים מקושרים")
+    if not payload.owner.strip() or not database.get_user(payload.owner):
+        raise HTTPException(status_code=422, detail="יש לבחור אחראי תהליך קיים")
     if payload.kind == "מנפיק":
         if not payload.framework_issuer_id or not database.get_issuer(payload.framework_issuer_id):
             raise HTTPException(status_code=422, detail="יש לבחור מנפיק קיים")
@@ -376,6 +409,7 @@ def create_process(payload: ProcessCreateInput):
         framework_issuer_id=payload.framework_issuer_id,
         framework_asset_id=framework_asset_id,
         data_date=payload.data_date,
+        owner=payload.owner.strip(),
     )
 
 
@@ -393,6 +427,8 @@ class ProcessAnswerInput(BaseModel):
     parameter_id: int
     answer_id: Optional[int] = None
     numeric_value: Optional[float] = None
+    matrix_x: Optional[str] = None
+    matrix_y: Optional[str] = None
 
 
 class ProcessStatusAction(BaseModel):
@@ -425,13 +461,16 @@ def apply_process_status_action(process_id: str, payload: ProcessStatusAction):
 def save_process_answer(process_id: str, payload: ProcessAnswerInput):
     if not database.get_process(process_id):
         raise HTTPException(status_code=404, detail="תהליך לא נמצא")
-    if payload.answer_id is None and payload.numeric_value is None:
-        raise HTTPException(status_code=422, detail="יש לספק תשובה או ערך מספרי")
+    has_matrix_pair = payload.matrix_x is not None and payload.matrix_y is not None
+    if payload.answer_id is None and payload.numeric_value is None and not has_matrix_pair:
+        raise HTTPException(status_code=422, detail="יש לספק תשובה, ערך מספרי, או ערכי ציר X/Y")
     database.save_process_answer(
         process_id,
         payload.parameter_id,
         answer_id=payload.answer_id,
         numeric_value=payload.numeric_value,
+        matrix_x=payload.matrix_x,
+        matrix_y=payload.matrix_y,
     )
     result = database.compute_process_score(process_id)
     database.save_process_computed_result(process_id, result["score"], result["rating"], result["completion"])
@@ -599,8 +638,13 @@ def _clean_model_input(payload: ModelInput):
     family = payload.family.strip()
     domain = payload.domain.strip()
     owner = payload.owner.strip()
+    rating_scale_id = (payload.rating_scale_id or "").strip()
     if not model_id or not name or not family or not domain or not owner:
         raise HTTPException(status_code=422, detail="כל השדות הם שדות חובה")
+    if not rating_scale_id:
+        raise HTTPException(status_code=422, detail="יש לבחור סולם דירוג")
+    if not database.get_rating_scale(rating_scale_id):
+        raise HTTPException(status_code=422, detail="סולם דירוג לא נמצא")
     questionnaires = [
         {"id": q.id.strip(), "weight": max(0, min(100, q.weight))}
         for q in payload.questionnaires
@@ -614,7 +658,7 @@ def _clean_model_input(payload: ModelInput):
         "owner": owner,
         "description": (payload.description or "").strip() or None,
         "questionnaires": questionnaires,
-        "rating_scale_id": (payload.rating_scale_id or "").strip() or None,
+        "rating_scale_id": rating_scale_id,
     }
 
 
@@ -747,15 +791,27 @@ def _clean_questionnaire_input(payload: QuestionnaireInput):
     name = payload.name.strip()
     if not questionnaire_id or not name:
         raise HTTPException(status_code=422, detail="קוד שאלון ושם שאלון הם שדות חובה")
-    parameters = [
-        {
-            "name": p.name.strip(),
-            "type": p.type,
-            "weight": p.weight,
-            "answers": [a.strip() for a in p.answers if a.strip()],
-        }
-        for p in payload.parameters
-    ]
+    parameters = []
+    for p in payload.parameters:
+        matrix_id = (p.matrix_id or "").strip() or None
+        if p.type == "מטריצה":
+            if not matrix_id:
+                raise HTTPException(status_code=422, detail=f"יש לבחור מטריצה עבור הפרמטר '{p.name.strip()}'")
+            if not database.get_matrix(matrix_id):
+                raise HTTPException(status_code=422, detail="המטריצה שנבחרה לא נמצאה")
+        parameters.append(
+            {
+                "name": p.name.strip(),
+                "type": p.type,
+                "weight": p.weight,
+                "answers": [
+                    {"text": a.text.strip(), "score": a.score, "min_value": a.min_value, "max_value": a.max_value}
+                    for a in p.answers
+                    if a.text.strip()
+                ],
+                "matrix_id": matrix_id,
+            }
+        )
     return {
         "id": questionnaire_id,
         "name": name,
@@ -869,6 +925,13 @@ def update_role(role_id: str, payload: RoleInput):
     return database.update_role(role_id, **cleaned)
 
 
+@app.delete("/api/roles/{role_id}", status_code=204)
+def delete_role(role_id: str):
+    if not database.get_role(role_id):
+        raise HTTPException(status_code=404, detail="תפקיד לא נמצא")
+    database.delete_role(role_id)
+
+
 @app.get("/api/users")
 def get_users():
     rows = database.get_all_users()
@@ -884,11 +947,15 @@ def _clean_user_input(payload: UserInput):
     full_name = payload.full_name.strip()
     if not user_id or not full_name:
         raise HTTPException(status_code=422, detail="שם משתמש ושם מלא הם שדות חובה")
+    team_id = (payload.team_id or "").strip() or None
+    if team_id and not database.get_team(team_id):
+        raise HTTPException(status_code=422, detail="צוות לא נמצא")
     return {
         "id": user_id,
         "full_name": full_name,
         "email": (payload.email or "").strip() or None,
         "role_ids": payload.role_ids,
+        "team_id": team_id,
     }
 
 

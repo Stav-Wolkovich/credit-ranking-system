@@ -46,9 +46,24 @@ activate_process() also updates the matching rankings row (status,
 tone, approval_date = today) so the report page's valid_from/valid_until
 (approval_date + 1 year, see get_all_rankings()) and expiring-soon
 tracking start immediately, since both rows represent the same תהליך.
+At either stage the reviewer can instead reject with a required comment
+(saved to rejection_comment) — reject_manager_process() sends it back to
+"הוחזר" (leaving the manager queue) and reject_committee_process() to
+"נדחה בועדה" (leaving the committee queue, recording its own
+final_rating instead of the model's computed_rating). Both email the
+process's owner (ranking_processes.owner, a users.id set at creation)
+directly via _email_process_owner(), reusing the RATING_RETURNED
+notification type's channels but targeting that specific person instead
+of the type's shared configured address. Neither status is terminal —
+הגשה לאישور from the scoring modal resubmits either back to בתהליך.
 
 Issuers columns are the fields the issuers page displays: id (issuer
-code), name, type, sector, country, active.
+code), name, type, sector, country, active. active is a stored column
+on the table but not the source of truth returned by get_all_issuers()/
+get_issuer() — it's overwritten with a computed value: פעיל means the
+issuer currently has an active דירוג (a rankings row naming them
+subject_issuer_id, status בתוקף, and still within its approval_date+1yr
+validity window — see _attach_issuer_active()/_currently_valid_rankings()).
 
 Teams columns are the fields the teams page displays: id (team code),
 name, type, process_kind (the ranking process type the team runs, e.g.
@@ -57,7 +72,9 @@ active.
 
 Assets columns are the fields the assets page displays: id (asset
 code), name, type, issuer_id (the issuer that owns the asset), cycle_stage
-(בסיס / היתכנות, הקמה, הפעלה, or None), active. get_all_assets()/get_asset()
+(בסיס / היתכנות, הקמה, הפעלה, or None), active — computed the same way
+as issuers' (see above) but keyed off framework_asset_id instead of
+subject_issuer_id, via _attach_asset_active(). get_all_assets()/get_asset()
 additionally join in issuer_name from the matching issuers row.
 
 Models columns are the fields the models page displays: id (model
@@ -90,14 +107,27 @@ questionnaire_parameters holds the scoring parameters that make up a
 questionnaire (questionnaire_id, name, type, weight, position).
 parameter_answers holds the ranked answer options for a parameter
 (parameter_id, text, position, score — lower is better, matching the
-rating scale's direction). Subjective (סובייקטיבי) parameters are
-answered by picking one of these; objective (אובייקטיבי) parameters
-have no answer options and take a direct numeric score instead.
+rating scale's direction — plus min_value/max_value for כמותי
+parameters, a numeric range the text describes, e.g. "10-15%"). score
+is set per-answer directly in the questionnaire editor (ניהול
+שאלונים); any answer saved without one falls back to a
+(position - 1) * 0.5 default (see the backfill in init_db()).
+Subjective (סובייקטיבי) parameters are answered by picking one of
+these; quantitative (כמותי) parameters are answered the same way —
+picking whichever range the real value falls into — min_value/max_value
+are shown for reference but never compared against a raw input, so
+ranges can overlap or gap without breaking anything. Objective
+(אובייקטיבי) parameters have no answer options and take a direct
+numeric score instead.
 
 process_answers holds what was actually answered for a ranking process
-(process_id, parameter_id, answer_id — for subjective — or
-numeric_value — for objective; UNIQUE per process+parameter, so saving
-again overwrites). compute_process_score() combines a process's answers
+(process_id, parameter_id, answer_id — for subjective — numeric_value —
+for objective — or matrix_x/matrix_y — for מטריצה, the two axis labels
+picked; UNIQUE per process+parameter, so saving again overwrites). A
+questionnaire_parameters row of type מטריצה links to a matrices row via
+matrix_id; its score is looked up from that matrix's grid at the
+matrix_x/matrix_y intersection (see _matrix_cell_score()) rather than
+being entered directly. compute_process_score() combines a process's answers
 into a result: each questionnaire's already-answered parameter scores
 combine via its own calculation_method (ממוצע משוקלל/סכום/מקסימום —
 unrecognized methods like מטריצה fall back to weighted average), then
@@ -113,8 +143,14 @@ completion — the model's raw output, as distinct from final_score/
 final_rating which represent what a committee actually approved.
 
 Users columns are the fields the users page displays: id (username),
-full_name, email, active. user_roles links a user to the roles
-assigned to them (user_id, role_id).
+full_name, email, active, team_id (a teams.id, the user's assigned
+צוות — get_all_users()/get_user() additionally join in team_name).
+user_roles links a user to the roles assigned to them (user_id, role_id).
+ranking_processes.owner (who performed the ranking) doesn't duplicate a
+team_id of its own — get_all_processes()/get_process()/
+get_processes_by_status() derive owner_team_name by joining the owner's
+users.team_id, via _attach_owner_team_names(), so a process always shows
+its owner's current team rather than a frozen copy.
 
 Roles columns are the fields the roles permission-matrix page displays:
 id (AD group code, e.g. RATING_ADMIN), name (Hebrew display name),
@@ -413,14 +449,6 @@ SEED_ROLE_ROWS = [
         "description": "בדיקת דירוגים, אישור או החזרה עם הערות. הפרדת סמכויות - לא יכול לאשר דירוג שהוא עצמו יצר",
         "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
         "can_approve": True, "can_committee_approve": False, "can_rerun": False,
-    },
-    {
-        "id": "RATING_COMMITTEE",
-        "name": "חבר ועדת דירוג",
-        "name_en": "Rating Committee",
-        "description": "אישור סופי של דירוגים הדורשים אישור ועדה",
-        "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
-        "can_approve": False, "can_committee_approve": True, "can_rerun": False,
     },
     {
         "id": "RATING_ADMIN",
@@ -781,7 +809,9 @@ def init_db():
             final_rating TEXT,
             computed_score REAL,
             computed_rating TEXT,
-            completion INTEGER NOT NULL DEFAULT 0
+            completion INTEGER NOT NULL DEFAULT 0,
+            owner TEXT REFERENCES users(id),
+            rejection_comment TEXT
         )
         """
     )
@@ -811,6 +841,10 @@ def init_db():
         conn.execute("ALTER TABLE ranking_processes ADD COLUMN framework_issuer_id TEXT")
     if "framework_asset_id" not in process_columns:
         conn.execute("ALTER TABLE ranking_processes ADD COLUMN framework_asset_id TEXT")
+    if "owner" not in process_columns:
+        conn.execute("ALTER TABLE ranking_processes ADD COLUMN owner TEXT REFERENCES users(id)")
+    if "rejection_comment" not in process_columns:
+        conn.execute("ALTER TABLE ranking_processes ADD COLUMN rejection_comment TEXT")
     process_count = conn.execute("SELECT COUNT(*) FROM ranking_processes").fetchone()[0]
     if process_count == 0:
         conn.executemany(
@@ -1089,10 +1123,14 @@ def init_db():
             name TEXT NOT NULL,
             type TEXT NOT NULL,
             weight INTEGER NOT NULL DEFAULT 0,
-            position INTEGER NOT NULL DEFAULT 0
+            position INTEGER NOT NULL DEFAULT 0,
+            matrix_id TEXT REFERENCES matrices(id)
         )
         """
     )
+    parameter_columns = {row["name"] for row in conn.execute("PRAGMA table_info(questionnaire_parameters)").fetchall()}
+    if "matrix_id" not in parameter_columns:
+        conn.execute("ALTER TABLE questionnaire_parameters ADD COLUMN matrix_id TEXT REFERENCES matrices(id)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS parameter_answers (
@@ -1100,13 +1138,18 @@ def init_db():
             parameter_id INTEGER NOT NULL REFERENCES questionnaire_parameters(id),
             text TEXT NOT NULL,
             position INTEGER NOT NULL DEFAULT 0,
-            score REAL
+            score REAL,
+            min_value REAL,
+            max_value REAL
         )
         """
     )
     answer_columns = {row["name"] for row in conn.execute("PRAGMA table_info(parameter_answers)").fetchall()}
     if "score" not in answer_columns:
         conn.execute("ALTER TABLE parameter_answers ADD COLUMN score REAL")
+    for col in ("min_value", "max_value"):
+        if col not in answer_columns:
+            conn.execute(f"ALTER TABLE parameter_answers ADD COLUMN {col} REAL")
     parameter_count = conn.execute("SELECT COUNT(*) FROM questionnaire_parameters").fetchone()[0]
     if parameter_count == 0:
         for position, param in enumerate(SEED_PARAMETER_ROWS, start=1):
@@ -1158,10 +1201,16 @@ def init_db():
             parameter_id INTEGER NOT NULL REFERENCES questionnaire_parameters(id),
             answer_id INTEGER REFERENCES parameter_answers(id),
             numeric_value REAL,
+            matrix_x TEXT,
+            matrix_y TEXT,
             UNIQUE (process_id, parameter_id)
         )
         """
     )
+    process_answer_columns = {row["name"] for row in conn.execute("PRAGMA table_info(process_answers)").fetchall()}
+    for col in ("matrix_x", "matrix_y"):
+        if col not in process_answer_columns:
+            conn.execute(f"ALTER TABLE process_answers ADD COLUMN {col} TEXT")
 
     _seed_re_proj_questionnaire_content(conn)
     _link_default_model_questionnaires(conn)
@@ -1238,10 +1287,14 @@ def init_db():
             id TEXT PRIMARY KEY,
             full_name TEXT NOT NULL,
             email TEXT,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            team_id TEXT REFERENCES teams(id)
         )
         """
     )
+    user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "team_id" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN team_id TEXT REFERENCES teams(id)")
     user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if user_count == 0:
         conn.executemany(
@@ -1633,10 +1686,27 @@ def count_rankings_expiring_within(days: int = 60):
     return count
 
 
+def _attach_owner_team_names(conn, processes):
+    """Derives each process's team from its owner's team assignment
+    (users.team_id) — ranking_processes doesn't store a team itself, but
+    the owner (אחראי תהליך) is who performed the ranking, so their team is
+    shown as the process's team."""
+    owner_team_by_user = {
+        row["id"]: row["team_id"] for row in conn.execute("SELECT id, team_id FROM users").fetchall()
+    }
+    team_names_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM teams").fetchall()}
+    for p in processes:
+        owner_team_id = owner_team_by_user.get(p.get("owner"))
+        p["owner_team_name"] = team_names_by_id.get(owner_team_id)
+    return processes
+
+
 def get_all_processes():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM ranking_processes ORDER BY id DESC").fetchall()]
     _attach_issuer_display_names(conn, rows)
+    _attach_owner_names(conn, rows)
+    _attach_owner_team_names(conn, rows)
     conn.close()
     return rows
 
@@ -1656,6 +1726,8 @@ def get_process(process_id: str):
         return None
     process = dict(row)
     _attach_issuer_display_names(conn, [process])
+    _attach_owner_names(conn, [process])
+    _attach_owner_team_names(conn, [process])
     conn.close()
     return process
 
@@ -1690,6 +1762,10 @@ def get_processes_by_status(status: str):
     ]
     _attach_issuer_display_names(conn, rows)
     _attach_process_context(conn, rows)
+    _attach_owner_names(conn, rows)
+    _attach_owner_team_names(conn, rows)
+    for p in rows:
+        p["team"] = p["team"] or p["owner_team_name"]
     conn.close()
     return rows
 
@@ -1740,20 +1816,60 @@ def activate_process(process_id: str):
     return get_process(process_id)
 
 
-def reject_committee_process(process_id: str, final_rating: str):
+def _email_process_owner(process_id: str, message: str):
+    """Emails the process's owner (אחראי תהליך) directly, reusing the
+    RATING_RETURNED notification type for its email/internal channels —
+    override_email targets that specific person rather than the type's
+    shared configured address. No-ops (logs 'not_configured') if the
+    process has no owner or the owner has no email on file."""
+    process = get_process(process_id)
+    owner_email = None
+    if process and process.get("owner"):
+        owner = get_user(process["owner"])
+        owner_email = owner["email"] if owner else None
+    _create_notification("RATING_RETURNED", process_id, message, override_email=owner_email)
+
+
+def reject_committee_process(process_id: str, final_rating: str, comment: str):
     """The ועדה can reject the model's computed rating and record its own
     final_rating instead — computed_rating stays untouched so both are
     visible side by side (the processes/approvals pages already show
     ציון/דירוג מחושב and ציון/דירוג סופי as separate columns). The process
-    leaves the committee queue: status moves to "נדחה בועדה"."""
+    leaves the committee queue: status moves to "נדחה בועדה", and the
+    comment explaining the change is saved and emailed to the owner."""
     conn = get_connection()
     conn.execute(
-        "UPDATE ranking_processes SET final_rating = ?, status = ?, tone = ? WHERE id = ?",
-        (final_rating, "נדחה בועדה", "red", process_id),
+        "UPDATE ranking_processes SET final_rating = ?, status = ?, tone = ?, rejection_comment = ? WHERE id = ?",
+        (final_rating, "נדחה בועדה", "red", comment, process_id),
     )
     conn.commit()
     conn.close()
-    return get_process(process_id)
+    process = get_process(process_id)
+    _email_process_owner(
+        process_id,
+        f"התהליך {process_id} ({process['code']}) נדחה על ידי הוועדה. דירוג סופי חדש: {final_rating}. הערה: {comment}",
+    )
+    return process
+
+
+def reject_manager_process(process_id: str, comment: str):
+    """A manager can return a submitted process to the analyst with
+    feedback instead of approving it: status moves to "הוחזר" (leaving the
+    manager queue, which only shows בתהליך), the comment is saved, and the
+    owner is emailed directly so they know the rating needs revision."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE ranking_processes SET status = ?, tone = ?, rejection_comment = ? WHERE id = ?",
+        ("הוחזר", "amber", comment, process_id),
+    )
+    conn.commit()
+    conn.close()
+    process = get_process(process_id)
+    _email_process_owner(
+        process_id,
+        f"התהליך {process_id} ({process['code']}) הוחזר על ידי מנהל לתיקון. הערה: {comment}",
+    )
+    return process
 
 
 def _next_process_id():
@@ -1774,12 +1890,15 @@ def create_ranking_process(
     framework_issuer_id: str | None,
     framework_asset_id: str | None,
     data_date: str | None,
+    owner: str,
 ):
     """Creates a new תהליך דירוג: a rankings row (for the report page) and a
     matching ranking_processes row (for the processes page), sharing the same
     generated id. subject_issuer_id always mirrors the resolved
     framework_issuer_id — when the framework is an asset, that's the asset's
-    own issuer_id, so the ranked entity is still the issuer that owns it."""
+    own issuer_id, so the ranked entity is still the issuer that owns it.
+    owner (a users.id) is the אחראי תהליך — who gets emailed if a manager
+    later returns the process with a comment (see reject_manager_process())."""
     conn = get_connection()
     if kind == "נכס":
         asset = conn.execute("SELECT issuer_id FROM assets WHERE id = ?", (framework_asset_id,)).fetchone()
@@ -1801,10 +1920,10 @@ def create_ranking_process(
         """
         INSERT INTO ranking_processes
             (id, subject_issuer_id, code, framework_issuer_id, framework_asset_id, status, tone,
-             final_score, final_rating, computed_score, computed_rating, completion)
-        VALUES (?, ?, '-', ?, ?, 'טיוטה', 'gray', NULL, NULL, NULL, NULL, 0)
+             final_score, final_rating, computed_score, computed_rating, completion, owner)
+        VALUES (?, ?, '-', ?, ?, 'טיוטה', 'gray', NULL, NULL, NULL, NULL, 0, ?)
         """,
-        (new_id, resolved_issuer_id, resolved_issuer_id, framework_asset_id),
+        (new_id, resolved_issuer_id, resolved_issuer_id, framework_asset_id, owner),
     )
     conn.commit()
     conn.close()
@@ -1837,11 +1956,18 @@ def get_process_scoring_structure(process_id: str):
         (model_id,),
     ).fetchall()
     saved_answers = {
-        row["parameter_id"]: {"answer_id": row["answer_id"], "numeric_value": row["numeric_value"]}
+        row["parameter_id"]: {
+            "answer_id": row["answer_id"],
+            "numeric_value": row["numeric_value"],
+            "matrix_x": row["matrix_x"],
+            "matrix_y": row["matrix_y"],
+        }
         for row in conn.execute(
-            "SELECT parameter_id, answer_id, numeric_value FROM process_answers WHERE process_id = ?", (process_id,)
+            "SELECT parameter_id, answer_id, numeric_value, matrix_x, matrix_y FROM process_answers WHERE process_id = ?",
+            (process_id,),
         ).fetchall()
     }
+    matrix_cache = {}
     questionnaires = []
     for link in q_links:
         q_row = conn.execute(
@@ -1850,22 +1976,39 @@ def get_process_scoring_structure(process_id: str):
         if not q_row:
             continue
         param_rows = conn.execute(
-            "SELECT id, name, type, weight FROM questionnaire_parameters WHERE questionnaire_id = ? ORDER BY position ASC",
+            "SELECT id, name, type, weight, matrix_id FROM questionnaire_parameters WHERE questionnaire_id = ? ORDER BY position ASC",
             (q_row["id"],),
         ).fetchall()
         parameters = []
         for p in param_rows:
             answer_rows = conn.execute(
-                "SELECT id, text, score FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
+                "SELECT id, text, score, min_value, max_value FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
                 (p["id"],),
             ).fetchall()
+            matrix = None
+            if p["type"] == "מטריצה" and p["matrix_id"]:
+                if p["matrix_id"] not in matrix_cache:
+                    m_row = conn.execute("SELECT * FROM matrices WHERE id = ?", (p["matrix_id"],)).fetchone()
+                    matrix_cache[p["matrix_id"]] = _attach_grid(conn, dict(m_row)) if m_row else None
+                matrix = matrix_cache[p["matrix_id"]]
             parameters.append(
                 {
                     "id": p["id"],
                     "name": p["name"],
                     "type": p["type"],
                     "weight": p["weight"],
-                    "answers": [{"id": a["id"], "text": a["text"], "score": a["score"]} for a in answer_rows],
+                    "answers": [
+                        {
+                            "id": a["id"],
+                            "text": a["text"],
+                            "score": a["score"],
+                            "min_value": a["min_value"],
+                            "max_value": a["max_value"],
+                        }
+                        for a in answer_rows
+                    ],
+                    "matrix_id": p["matrix_id"],
+                    "matrix": matrix,
                     "current_answer": saved_answers.get(p["id"]),
                 }
             )
@@ -1905,15 +2048,21 @@ def get_process_scoring_structure(process_id: str):
 
 
 def save_process_answer(
-    process_id: str, parameter_id: int, answer_id: int | None = None, numeric_value: float | None = None
+    process_id: str,
+    parameter_id: int,
+    answer_id: int | None = None,
+    numeric_value: float | None = None,
+    matrix_x: str | None = None,
+    matrix_y: str | None = None,
 ):
     conn = get_connection()
     conn.execute(
         "DELETE FROM process_answers WHERE process_id = ? AND parameter_id = ?", (process_id, parameter_id)
     )
     conn.execute(
-        "INSERT INTO process_answers (process_id, parameter_id, answer_id, numeric_value) VALUES (?, ?, ?, ?)",
-        (process_id, parameter_id, answer_id, numeric_value),
+        "INSERT INTO process_answers (process_id, parameter_id, answer_id, numeric_value, matrix_x, matrix_y) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (process_id, parameter_id, answer_id, numeric_value, matrix_x, matrix_y),
     )
     conn.commit()
     conn.close()
@@ -1957,6 +2106,22 @@ def _combine_scores(score_weight_pairs: list[tuple[float, float]], method: str):
     return sum(s * w for s, w in score_weight_pairs) / total_weight
 
 
+def _matrix_cell_score(matrix, matrix_x: str, matrix_y: str):
+    """Looks up the score for a מטריצה-type parameter's answer: the cell at
+    the intersection of the chosen X/Y axis labels. None if the matrix is
+    missing/has no grid or the labels no longer match its axes (e.g. the
+    matrix was edited after the answer was saved)."""
+    if not matrix or not matrix.get("cell_values"):
+        return None
+    x_values = matrix.get("x_values") or []
+    y_values = matrix.get("y_values") or []
+    if matrix_x not in x_values or matrix_y not in y_values:
+        return None
+    x_index = x_values.index(matrix_x)
+    y_index = y_values.index(matrix_y)
+    return matrix["cell_values"][y_index][x_index]
+
+
 def compute_process_score(process_id: str):
     """Computes completion% always, plus a running score/rating from
     whatever parameters are already answered — so the score updates live as
@@ -1981,9 +2146,11 @@ def compute_process_score(process_id: str):
             answer = p["current_answer"]
             score = None
             if answer:
-                if p["type"] == "סובייקטיבי" and answer.get("answer_id") is not None:
+                if p["type"] in ("סובייקטיבי", "כמותי") and answer.get("answer_id") is not None:
                     matching = next((a for a in p["answers"] if a["id"] == answer["answer_id"]), None)
                     score = matching["score"] if matching else None
+                elif p["type"] == "מטריצה" and answer.get("matrix_x") and answer.get("matrix_y"):
+                    score = _matrix_cell_score(p["matrix"], answer["matrix_x"], answer["matrix_y"])
                 elif answer.get("numeric_value") is not None:
                     score = answer["numeric_value"]
             if score is not None:
@@ -2028,11 +2195,45 @@ def save_process_computed_result(process_id: str, score: float | None, rating: s
     return get_process(process_id)
 
 
+def _currently_valid_rankings(conn):
+    """rankings rows whose status is בתוקף AND whose approval_date + 1yr
+    validity window (see get_all_rankings()) hasn't lapsed — status never
+    self-expires on its own, so 'בתוקף' alone isn't enough to mean
+    currently active."""
+    today = date.today()
+    rows = conn.execute(
+        "SELECT subject_issuer_id, framework_asset_id, approval_date FROM rankings "
+        "WHERE status = 'בתוקף' AND approval_date IS NOT NULL"
+    ).fetchall()
+    return [row for row in rows if _add_one_year(date.fromisoformat(row["approval_date"])) >= today]
+
+
+def _attach_issuer_active(conn, issuers):
+    """A מנפיק is פעיל when it currently has an active דירוג — a
+    currently-valid rankings row naming it as the subject, whether they
+    were rated directly or via an asset they own (both set
+    subject_issuer_id, see create_ranking_process())."""
+    active_ids = {row["subject_issuer_id"] for row in _currently_valid_rankings(conn) if row["subject_issuer_id"]}
+    for issuer in issuers:
+        issuer["active"] = issuer["id"] in active_ids
+    return issuers
+
+
+def _attach_asset_active(conn, assets):
+    """A נכס is פעיל when it currently has an active דירוג that used it
+    as the framework."""
+    active_ids = {row["framework_asset_id"] for row in _currently_valid_rankings(conn) if row["framework_asset_id"]}
+    for asset in assets:
+        asset["active"] = asset["id"] in active_ids
+    return assets
+
+
 def get_all_issuers():
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM issuers ORDER BY rowid ASC").fetchall()
+    rows = [dict(row) for row in conn.execute("SELECT * FROM issuers ORDER BY rowid ASC").fetchall()]
+    _attach_issuer_active(conn, rows)
     conn.close()
-    return [{**dict(row), "active": bool(row["active"])} for row in rows]
+    return rows
 
 
 def count_issuers():
@@ -2045,8 +2246,13 @@ def count_issuers():
 def get_issuer(issuer_id: str):
     conn = get_connection()
     row = conn.execute("SELECT * FROM issuers WHERE id = ?", (issuer_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    issuer = dict(row)
+    _attach_issuer_active(conn, [issuer])
     conn.close()
-    return {**dict(row), "active": bool(row["active"])} if row else None
+    return issuer
 
 
 def issuer_code_taken(code: str, exclude_id: str | None = None):
@@ -2208,8 +2414,9 @@ def get_all_assets():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM assets ORDER BY rowid ASC").fetchall()]
     _attach_issuer_names(conn, rows)
+    _attach_asset_active(conn, rows)
     conn.close()
-    return [{**row, "active": bool(row["active"])} for row in rows]
+    return rows
 
 
 def count_assets():
@@ -2227,8 +2434,8 @@ def get_asset(asset_id: str):
         return None
     asset = dict(row)
     _attach_issuer_names(conn, [asset])
+    _attach_asset_active(conn, [asset])
     conn.close()
-    asset["active"] = bool(asset["active"])
     return asset
 
 
@@ -2595,7 +2802,7 @@ def _get_parameters_with_answers(conn, questionnaire_id: str):
     parameters = []
     for p in param_rows:
         answer_rows = conn.execute(
-            "SELECT text FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
+            "SELECT text, score, min_value, max_value FROM parameter_answers WHERE parameter_id = ? ORDER BY position ASC",
             (p["id"],),
         ).fetchall()
         parameters.append(
@@ -2603,7 +2810,11 @@ def _get_parameters_with_answers(conn, questionnaire_id: str):
                 "name": p["name"],
                 "type": p["type"],
                 "weight": p["weight"],
-                "answers": [a["text"] for a in answer_rows],
+                "answers": [
+                    {"text": a["text"], "score": a["score"], "min_value": a["min_value"], "max_value": a["max_value"]}
+                    for a in answer_rows
+                ],
+                "matrix_id": p["matrix_id"],
             }
         )
     return parameters
@@ -2660,15 +2871,19 @@ def _replace_questionnaire_parameters(conn, questionnaire_id: str, parameters: l
 
     for position, param in enumerate(parameters, start=1):
         cur = conn.execute(
-            "INSERT INTO questionnaire_parameters (questionnaire_id, name, type, weight, position) VALUES (?, ?, ?, ?, ?)",
-            (questionnaire_id, param["name"], param["type"], param["weight"], position),
+            "INSERT INTO questionnaire_parameters (questionnaire_id, name, type, weight, position, matrix_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (questionnaire_id, param["name"], param["type"], param["weight"], position, param.get("matrix_id")),
         )
         param_id = cur.lastrowid
         answers = param.get("answers") or []
         if answers:
             conn.executemany(
-                "INSERT INTO parameter_answers (parameter_id, text, position) VALUES (?, ?, ?)",
-                [(param_id, text, i) for i, text in enumerate(answers, start=1)],
+                "INSERT INTO parameter_answers (parameter_id, text, position, score, min_value, max_value) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (param_id, a["text"], i, a.get("score"), a.get("min_value"), a.get("max_value"))
+                    for i, a in enumerate(answers, start=1)
+                ],
             )
 
 
@@ -2882,6 +3097,14 @@ def update_role(
     return get_role(id)
 
 
+def delete_role(role_id: str):
+    conn = get_connection()
+    conn.execute("DELETE FROM user_roles WHERE role_id = ?", (role_id,))
+    conn.execute("DELETE FROM roles WHERE id = ?", (role_id,))
+    conn.commit()
+    conn.close()
+
+
 def _attach_user_roles(conn, users):
     links = conn.execute("SELECT user_id, role_id FROM user_roles").fetchall()
     roles_by_user = {}
@@ -2892,10 +3115,18 @@ def _attach_user_roles(conn, users):
     return users
 
 
+def _attach_user_team_names(conn, users):
+    names_by_id = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM teams").fetchall()}
+    for user in users:
+        user["team_name"] = names_by_id.get(user["team_id"])
+    return users
+
+
 def get_all_users():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM users ORDER BY rowid ASC").fetchall()]
     _attach_user_roles(conn, rows)
+    _attach_user_team_names(conn, rows)
     conn.close()
     for row in rows:
         row["active"] = bool(row["active"])
@@ -2910,6 +3141,7 @@ def get_user(user_id: str):
         return None
     user = dict(row)
     _attach_user_roles(conn, [user])
+    _attach_user_team_names(conn, [user])
     conn.close()
     user["active"] = bool(user["active"])
     return user
@@ -2943,11 +3175,13 @@ def _replace_user_roles(conn, user_id: str, role_ids: list[str]):
         )
 
 
-def create_user(id: str, full_name: str, email: str | None, role_ids: list[str] | None = None):
+def create_user(
+    id: str, full_name: str, email: str | None, role_ids: list[str] | None = None, team_id: str | None = None
+):
     conn = get_connection()
     conn.execute(
-        "INSERT INTO users (id, full_name, email, active) VALUES (?, ?, ?, 1)",
-        (id, full_name, email),
+        "INSERT INTO users (id, full_name, email, active, team_id) VALUES (?, ?, ?, 1, ?)",
+        (id, full_name, email, team_id),
     )
     _replace_user_roles(conn, id, role_ids or [])
     conn.commit()
@@ -2956,12 +3190,17 @@ def create_user(id: str, full_name: str, email: str | None, role_ids: list[str] 
 
 
 def update_user(
-    original_id: str, id: str, full_name: str, email: str | None, role_ids: list[str] | None = None
+    original_id: str,
+    id: str,
+    full_name: str,
+    email: str | None,
+    role_ids: list[str] | None = None,
+    team_id: str | None = None,
 ):
     conn = get_connection()
     conn.execute(
-        "UPDATE users SET id = ?, full_name = ?, email = ? WHERE id = ?",
-        (id, full_name, email, original_id),
+        "UPDATE users SET id = ?, full_name = ?, email = ?, team_id = ? WHERE id = ?",
+        (id, full_name, email, team_id, original_id),
     )
     if original_id != id:
         conn.execute("UPDATE user_roles SET user_id = ? WHERE user_id = ?", (id, original_id))
@@ -3461,10 +3700,13 @@ def update_notification_type_email(type_id: str, notification_email: str | None)
     return get_notification_type(type_id)
 
 
-def _create_notification(type_id: str, entity_id: str | None, message: str):
+def _create_notification(type_id: str, entity_id: str | None, message: str, override_email: str | None = None):
     """Logs a real notification event to the יומן ביקורת, and — for types
     whose channel includes email and that have a notification_email
     configured — actually sends it via SMTP (see email_sender.py).
+    override_email sends to a specific person (e.g. a process's owner)
+    instead of the type's shared/configured address — used when the
+    notification is about one person's record rather than a broadcast.
     email_status records what really happened: 'sent', 'failed' (with
     email_error set), or 'not_configured' (email channel wanted but no
     address set, or no SMTP_* env vars configured)."""
@@ -3474,7 +3716,7 @@ def _create_notification(type_id: str, entity_id: str | None, message: str):
     email_status = None
     email_error = None
     if ntype and "email" in (ntype["channels"] or "").split(","):
-        email_to = ntype["notification_email"]
+        email_to = override_email or ntype["notification_email"]
         if email_to:
             sent, email_status, email_error = email_sender.send_email(
                 email_to, f"התראה: {ntype['name']}", message

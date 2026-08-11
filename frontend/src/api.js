@@ -137,6 +137,11 @@ export const api = {
   getCommitteeApprovals: () => request("/approvals/committee"),
   approveManagerProcess: (id) => request(`/approvals/${id}/approve-manager`, { method: "POST" }),
   approveCommitteeProcess: (id) => request(`/approvals/${id}/approve-committee`, { method: "POST" }),
+  rejectManagerProcess: (id, payload) =>
+    request(`/approvals/${id}/reject-manager`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   rejectCommitteeProcess: (id, payload) =>
     request(`/approvals/${id}/reject-committee`, {
       method: "POST",
@@ -153,6 +158,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(role),
     }),
+  deleteRole: (id) => request(`/roles/${id}`, { method: "DELETE" }),
   getUsers: () => request("/users"),
   createUser: (user) =>
     request("/users", {

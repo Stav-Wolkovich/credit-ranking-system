@@ -78,6 +78,7 @@ export default function UsersPage() {
         label: "תפקידים",
         accessor: (r) => r.role_ids.map((roleId) => roleNameById[roleId] ?? roleId),
       },
+      { key: "team_name", label: "צוות", accessor: (r) => r.team_name },
       { key: "active", label: "פעיל", accessor: (r) => (r.active ? "פעיל" : "לא פעיל") },
       { key: "actions", label: "פעולות", accessor: () => null, filterable: false },
     ],
@@ -150,6 +151,7 @@ export default function UsersPage() {
                     ))
                   )}
                 </td>
+                <td style={{ padding: "12px 16px" }}>{r.team_name ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>
                   <Badge label={r.active ? "פעיל" : "לא פעיל"} tone={r.active ? "green" : "gray"} />
                 </td>

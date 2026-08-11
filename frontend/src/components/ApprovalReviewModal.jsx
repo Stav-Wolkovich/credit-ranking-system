@@ -14,13 +14,28 @@ function Row({ label, value }) {
 
 const CALC_METHOD_LABELS = { "ממוצע משוקלל": "ממוצע משוקלל", "סכום": "סכום", "מקסימום": "מקסימום" };
 
+function matrixCellScore(matrix, x, y) {
+  if (!matrix || !matrix.cell_values || x == null || y == null) return null;
+  const xIndex = matrix.x_values.indexOf(x);
+  const yIndex = matrix.y_values.indexOf(y);
+  if (xIndex === -1 || yIndex === -1) return null;
+  return matrix.cell_values[yIndex]?.[xIndex] ?? null;
+}
+
 function answeredText(parameter) {
   const answer = parameter.current_answer;
   if (!answer) return null;
-  if (parameter.type === "סובייקטיבי") {
+  if (parameter.type === "סובייקטיבי" || parameter.type === "כמותי") {
     if (answer.answer_id == null) return null;
     const matching = parameter.answers.find((a) => a.id === answer.answer_id);
     return matching ? { text: matching.text, score: matching.score } : null;
+  }
+  if (parameter.type === "מטריצה") {
+    if (answer.matrix_x == null || answer.matrix_y == null) return null;
+    return {
+      text: `${answer.matrix_x} / ${answer.matrix_y}`,
+      score: matrixCellScore(parameter.matrix, answer.matrix_x, answer.matrix_y),
+    };
   }
   if (answer.numeric_value == null) return null;
   return { text: null, score: answer.numeric_value };
@@ -156,12 +171,28 @@ export default function ApprovalReviewModal({ process, stage, onCancel, onApprov
             <Row label="סוג" value={process.kind ?? (process.framework_asset_id ? "נכס" : "מנפיק")} />
             <Row label="מודל" value={process.model} />
             <Row label="צוות" value={process.team} />
+            <Row label="אחראי תהליך" value={process.owner_name} />
             <Row label="ציון מחושב" value={process.computed_score} />
             <Row label="דירוג מחושב" value={process.computed_rating} />
             <Row label="ציון סופי" value={process.final_score} />
             <Row label="דירוג סופי" value={process.final_rating} />
             <Row label="השלמה" value={process.completion != null ? `${process.completion}%` : null} />
           </div>
+
+          {process.rejection_comment && (
+            <div
+              style={{
+                marginTop: 12,
+                background: "#fbe9e9",
+                border: "1px solid #f3c9c9",
+                borderRadius: 8,
+                padding: "10px 12px",
+              }}
+            >
+              <div style={{ fontSize: 11.5, color: "#b52d2d", fontWeight: 700, marginBottom: 4 }}>הערת דחייה</div>
+              <div style={{ fontSize: 13, color: "var(--text-dark)" }}>{process.rejection_comment}</div>
+            </div>
+          )}
 
           <div style={{ marginTop: 18 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-dark)", marginBottom: 8 }}>
@@ -223,26 +254,24 @@ export default function ApprovalReviewModal({ process, stage, onCancel, onApprov
           >
             ביטול
           </button>
-          {stage === "committee" && (
-            <button
-              type="button"
-              onClick={() => setRejecting(true)}
-              disabled={saving}
-              style={{
-                background: "#fff",
-                color: "#b52d2d",
-                border: "1px solid #e0a0a0",
-                borderRadius: 6,
-                padding: "9px 18px",
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: saving ? "default" : "pointer",
-                opacity: saving ? 0.7 : 1,
-              }}
-            >
-              ✕ דחיית דירוג
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setRejecting(true)}
+            disabled={saving}
+            style={{
+              background: "#fff",
+              color: "#b52d2d",
+              border: "1px solid #e0a0a0",
+              borderRadius: 6,
+              padding: "9px 18px",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: saving ? "default" : "pointer",
+              opacity: saving ? 0.7 : 1,
+            }}
+          >
+            ✕ דחיית דירוג
+          </button>
           <button
             type="button"
             onClick={handleApprove}
@@ -267,6 +296,7 @@ export default function ApprovalReviewModal({ process, stage, onCancel, onApprov
       {rejecting && (
         <RejectRatingModal
           process={process}
+          stage={stage}
           onCancel={() => setRejecting(false)}
           onRejected={(updated) => {
             setRejecting(false);
