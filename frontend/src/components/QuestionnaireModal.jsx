@@ -214,7 +214,6 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                     </div>
                   </>
                 )}
-                <div style={{ width: 16, flexShrink: 0 }} />
               </div>
               {parameter.answers.map((answer, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
@@ -297,9 +296,6 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                       />
                     </>
                   )}
-                  <span style={{ width: 16, flexShrink: 0, fontSize: 12, color: "var(--text-light)", textAlign: "center" }}>
-                    {i + 1}
-                  </span>
                 </div>
               ))}
               <button
