@@ -194,27 +194,43 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
 
           {(parameter.type === "סובייקטיבי" || parameter.type === "כמותי") && (
             <div>
-              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <div style={{ width: 20, flexShrink: 0 }} />
                 <div style={{ flex: 1, fontSize: 12, color: "var(--text-mid)" }}>תיאור</div>
-                <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>ציון</div>
+                <div style={{ width: 52, flexShrink: 0, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                  ציון
+                </div>
                 {parameter.type === "כמותי" && (
                   <>
-                    <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                    <div
+                      style={{ width: 52, flexShrink: 0, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}
+                    >
                       מקסימום
                     </div>
-                    <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                    <div
+                      style={{ width: 52, flexShrink: 0, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}
+                    >
                       מינימום
                     </div>
                   </>
                 )}
+                <div style={{ width: 16, flexShrink: 0 }} />
               </div>
               {parameter.answers.map((answer, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                   <button
                     type="button"
                     onClick={() => removeAnswer(i)}
                     aria-label="הסר תשובה"
-                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
+                    style={{
+                      width: 20,
+                      flexShrink: 0,
+                      background: "transparent",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      color: "#b52d2d",
+                    }}
                   >
                     ✕
                   </button>
@@ -224,9 +240,10 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                     onChange={(e) => updateAnswerText(i, e.target.value)}
                     style={{
                       flex: 1,
+                      minWidth: 0,
                       border: "1px solid var(--border)",
                       borderRadius: 6,
-                      padding: "7px 10px",
+                      padding: "7px 8px",
                       fontSize: 13,
                     }}
                   />
@@ -237,10 +254,11 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                     onChange={(e) => updateAnswerScore(i, e.target.value)}
                     title="ציון — נמוך יותר = טוב יותר"
                     style={{
-                      width: 60,
+                      width: 52,
+                      flexShrink: 0,
                       border: "1px solid var(--border)",
                       borderRadius: 6,
-                      padding: "7px 8px",
+                      padding: "7px 4px",
                       fontSize: 13,
                       textAlign: "center",
                     }}
@@ -253,10 +271,11 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                         value={answer.max_value ?? ""}
                         onChange={(e) => updateAnswerRange(i, "max_value", e.target.value)}
                         style={{
-                          width: 60,
+                          width: 52,
+                          flexShrink: 0,
                           border: "1px solid var(--border)",
                           borderRadius: 6,
-                          padding: "7px 8px",
+                          padding: "7px 4px",
                           fontSize: 13,
                           textAlign: "center",
                         }}
@@ -267,17 +286,18 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                         value={answer.min_value ?? ""}
                         onChange={(e) => updateAnswerRange(i, "min_value", e.target.value)}
                         style={{
-                          width: 60,
+                          width: 52,
+                          flexShrink: 0,
                           border: "1px solid var(--border)",
                           borderRadius: 6,
-                          padding: "7px 8px",
+                          padding: "7px 4px",
                           fontSize: 13,
                           textAlign: "center",
                         }}
                       />
                     </>
                   )}
-                  <span style={{ fontSize: 12, color: "var(--text-light)", minWidth: 16, textAlign: "center" }}>
+                  <span style={{ width: 16, flexShrink: 0, fontSize: 12, color: "var(--text-light)", textAlign: "center" }}>
                     {i + 1}
                   </span>
                 </div>
@@ -426,7 +446,7 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
         style={{
           background: "#fff",
           borderRadius: 10,
-          width: 460,
+          width: parameters.some((p) => p.type === "כמותי") ? 560 : 460,
           maxWidth: "90vw",
           maxHeight: "88vh",
           padding: 22,
