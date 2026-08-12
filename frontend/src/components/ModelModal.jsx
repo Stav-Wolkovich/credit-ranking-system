@@ -59,6 +59,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
     family: initial?.family ?? "",
     domain: initial?.domain ?? DOMAIN_OPTIONS[0],
     owner: initial?.owner ?? "",
+    active_version: initial?.active_version ?? "v1",
     description: initial?.description ?? "",
     rating_scale_id: initial?.rating_scale_id ?? "",
   });
@@ -158,6 +159,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
       family: form.family.trim(),
       domain: form.domain,
       owner: form.owner.trim(),
+      active_version: form.active_version.trim() || "v1",
       description: form.description.trim() || null,
       questionnaires: selected.map((q) => ({ id: q.id, weight: Number(q.weight) || 0 })),
       rating_scale_id: form.rating_scale_id || null,
@@ -270,6 +272,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
               value={form.family}
               onChange={set("family")}
             />
+            <Field label="גרסה" value={form.active_version} onChange={set("active_version")} />
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>תחום *</div>

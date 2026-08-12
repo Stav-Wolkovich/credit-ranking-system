@@ -3,7 +3,7 @@ import { api } from "../api.js";
 import { PageHeader, ErrorBanner } from "../components/ui.jsx";
 import NotificationTypeEmailModal from "../components/NotificationTypeEmailModal.jsx";
 
-const LOG_COLUMNS = ["תאריך ושעה", "סוג התראה", "הודעה", "ערוצים", "אימייל", "סטטוס שליחה"];
+const LOG_COLUMNS = ["תאריך ושעה", "סוג התראה", "בוצע על ידי", "הודעה", "ערוצים", "אימייל", "סטטוס שליחה"];
 const TYPE_COLUMNS = ["תיאור", "טריגר", "נמען", "ערוץ", "תזמון", "אימייל להתראות", "פעולות"];
 
 const CHANNEL_LABELS = { email: "אימייל", internal: "פנימי" };
@@ -105,6 +105,7 @@ function NotificationLogTab() {
               <tr key={r.id} style={{ borderTop: "1px solid var(--border)" }}>
                 <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>{r.created_at.replace("T", " ")}</td>
                 <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>{r.type_name}</td>
+                <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>{r.actor_name}</td>
                 <td style={{ padding: "12px 16px" }}>{r.message}</td>
                 <td style={{ padding: "12px 16px" }}>
                   <ChannelBadges channels={r.channels} />

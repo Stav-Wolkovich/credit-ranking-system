@@ -896,10 +896,14 @@ def init_db():
             type TEXT,
             sector TEXT,
             country TEXT,
-            active INTEGER NOT NULL DEFAULT 0
+            active INTEGER NOT NULL DEFAULT 0,
+            is_fictitious INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    issuer_columns = {row["name"] for row in conn.execute("PRAGMA table_info(issuers)").fetchall()}
+    if "is_fictitious" not in issuer_columns:
+        conn.execute("ALTER TABLE issuers ADD COLUMN is_fictitious INTEGER NOT NULL DEFAULT 0")
     issuer_count = conn.execute("SELECT COUNT(*) FROM issuers").fetchone()[0]
     if issuer_count == 0:
         conn.executemany(
@@ -955,10 +959,14 @@ def init_db():
             type TEXT,
             issuer_id TEXT REFERENCES issuers(id),
             cycle_stage TEXT,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            is_fictitious INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    asset_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assets)").fetchall()}
+    if "is_fictitious" not in asset_columns:
+        conn.execute("ALTER TABLE assets ADD COLUMN is_fictitious INTEGER NOT NULL DEFAULT 0")
     asset_count = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
     if asset_count == 0:
         conn.executemany(
@@ -1434,12 +1442,13 @@ def init_db():
             created_at TEXT NOT NULL,
             email_sent_to TEXT,
             email_status TEXT,
-            email_error TEXT
+            email_error TEXT,
+            actor_user_id TEXT REFERENCES users(id)
         )
         """
     )
     notification_columns = {row["name"] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
-    for col in ("email_status", "email_error"):
+    for col in ("email_status", "email_error", "actor_user_id"):
         if col not in notification_columns:
             conn.execute(f"ALTER TABLE notifications ADD COLUMN {col} TEXT")
 
@@ -1791,6 +1800,7 @@ def update_process_status(process_id: str, status: str, tone: str):
             "RATING_PENDING_COMMITTEE",
             process_id,
             f"התהליך {process_id} ({process['code']}) אושר על ידי מנהל וממתין כעת לאישור ועדה",
+            actor_user_id=process.get("owner") if process else None,
         )
     return process
 
@@ -1827,7 +1837,13 @@ def _email_process_owner(process_id: str, message: str):
     if process and process.get("owner"):
         owner = get_user(process["owner"])
         owner_email = owner["email"] if owner else None
-    _create_notification("RATING_RETURNED", process_id, message, override_email=owner_email)
+    _create_notification(
+        "RATING_RETURNED",
+        process_id,
+        message,
+        override_email=owner_email,
+        actor_user_id=process.get("owner") if process else None,
+    )
 
 
 def reject_committee_process(process_id: str, final_rating: str, comment: str):
@@ -2279,11 +2295,13 @@ def issuer_name_taken(name: str, exclude_id: str | None = None):
     return row is not None
 
 
-def create_issuer(id: str, name: str, type: str | None, sector: str | None, country: str | None):
+def create_issuer(
+    id: str, name: str, type: str | None, sector: str | None, country: str | None, is_fictitious: bool = False
+):
     conn = get_connection()
     conn.execute(
-        "INSERT INTO issuers (id, name, type, sector, country, active) VALUES (?, ?, ?, ?, ?, 0)",
-        (id, name, type, sector, country),
+        "INSERT INTO issuers (id, name, type, sector, country, active, is_fictitious) VALUES (?, ?, ?, ?, ?, 0, ?)",
+        (id, name, type, sector, country, int(is_fictitious)),
     )
     conn.commit()
     conn.close()
@@ -2291,12 +2309,18 @@ def create_issuer(id: str, name: str, type: str | None, sector: str | None, coun
 
 
 def update_issuer(
-    original_id: str, id: str, name: str, type: str | None, sector: str | None, country: str | None
+    original_id: str,
+    id: str,
+    name: str,
+    type: str | None,
+    sector: str | None,
+    country: str | None,
+    is_fictitious: bool = False,
 ):
     conn = get_connection()
     conn.execute(
-        "UPDATE issuers SET id = ?, name = ?, type = ?, sector = ?, country = ? WHERE id = ?",
-        (id, name, type, sector, country, original_id),
+        "UPDATE issuers SET id = ?, name = ?, type = ?, sector = ?, country = ?, is_fictitious = ? WHERE id = ?",
+        (id, name, type, sector, country, int(is_fictitious), original_id),
     )
     conn.commit()
     conn.close()
@@ -2449,11 +2473,18 @@ def asset_code_taken(code: str, exclude_id: str | None = None):
     return row is not None
 
 
-def create_asset(id: str, name: str, type: str | None, issuer_id: str | None, cycle_stage: str | None):
+def create_asset(
+    id: str,
+    name: str,
+    type: str | None,
+    issuer_id: str | None,
+    cycle_stage: str | None,
+    is_fictitious: bool = False,
+):
     conn = get_connection()
     conn.execute(
-        "INSERT INTO assets (id, name, type, issuer_id, cycle_stage, active) VALUES (?, ?, ?, ?, ?, 1)",
-        (id, name, type, issuer_id, cycle_stage),
+        "INSERT INTO assets (id, name, type, issuer_id, cycle_stage, active, is_fictitious) VALUES (?, ?, ?, ?, ?, 1, ?)",
+        (id, name, type, issuer_id, cycle_stage, int(is_fictitious)),
     )
     conn.commit()
     conn.close()
@@ -2461,12 +2492,18 @@ def create_asset(id: str, name: str, type: str | None, issuer_id: str | None, cy
 
 
 def update_asset(
-    original_id: str, id: str, name: str, type: str | None, issuer_id: str | None, cycle_stage: str | None
+    original_id: str,
+    id: str,
+    name: str,
+    type: str | None,
+    issuer_id: str | None,
+    cycle_stage: str | None,
+    is_fictitious: bool = False,
 ):
     conn = get_connection()
     conn.execute(
-        "UPDATE assets SET id = ?, name = ?, type = ?, issuer_id = ?, cycle_stage = ? WHERE id = ?",
-        (id, name, type, issuer_id, cycle_stage, original_id),
+        "UPDATE assets SET id = ?, name = ?, type = ?, issuer_id = ?, cycle_stage = ?, is_fictitious = ? WHERE id = ?",
+        (id, name, type, issuer_id, cycle_stage, int(is_fictitious), original_id),
     )
     conn.commit()
     conn.close()
@@ -2566,6 +2603,7 @@ def create_model(
     domain: str,
     owner: str,
     last_updated: str,
+    active_version: str = "v1",
     description: str | None = None,
     questionnaires: list[dict] | None = None,
     rating_scale_id: str | None = None,
@@ -2576,9 +2614,9 @@ def create_model(
         INSERT INTO models
             (id, name, family, domain, owner, active_version, versions_count,
              segments_count, questionnaires_count, status, tone, last_updated, description, rating_scale_id)
-        VALUES (?, ?, ?, ?, ?, 'v1', 1, 0, 0, 'טיוטה', 'gray', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 1, 0, 0, 'טיוטה', 'gray', ?, ?, ?)
         """,
-        (id, name, family, domain, owner, last_updated, description, rating_scale_id),
+        (id, name, family, domain, owner, active_version, last_updated, description, rating_scale_id),
     )
     _replace_model_questionnaires(conn, id, questionnaires or [])
     conn.commit()
@@ -2594,6 +2632,7 @@ def update_model(
     domain: str,
     owner: str,
     last_updated: str,
+    active_version: str = "v1",
     description: str | None = None,
     questionnaires: list[dict] | None = None,
     rating_scale_id: str | None = None,
@@ -2601,11 +2640,11 @@ def update_model(
     conn = get_connection()
     conn.execute(
         """
-        UPDATE models SET id = ?, name = ?, family = ?, domain = ?, owner = ?, last_updated = ?, description = ?,
-            rating_scale_id = ?
+        UPDATE models SET id = ?, name = ?, family = ?, domain = ?, owner = ?, active_version = ?,
+            last_updated = ?, description = ?, rating_scale_id = ?
         WHERE id = ?
         """,
-        (id, name, family, domain, owner, last_updated, description, rating_scale_id, original_id),
+        (id, name, family, domain, owner, active_version, last_updated, description, rating_scale_id, original_id),
     )
     if original_id != id:
         conn.execute("DELETE FROM model_questionnaires WHERE model_id = ?", (original_id,))
@@ -2613,8 +2652,42 @@ def update_model(
         _replace_model_questionnaires(conn, id, questionnaires)
     conn.commit()
     conn.close()
-    _create_notification("MODEL_CHANGED", id, f"מודל \"{name}\" ({id}) עודכן")
+    _create_notification("MODEL_CHANGED", id, f"מודל \"{name}\" ({id}) עודכן", actor_user_id=owner)
     return get_model(id)
+
+
+def duplicate_model(source_id: str, new_id: str, new_name: str, last_updated: str):
+    conn = get_connection()
+    source = conn.execute("SELECT * FROM models WHERE id = ?", (source_id,)).fetchone()
+    conn.execute(
+        """
+        INSERT INTO models
+            (id, name, family, domain, owner, active_version, versions_count,
+             segments_count, questionnaires_count, status, tone, last_updated, description, rating_scale_id)
+        VALUES (?, ?, ?, ?, ?, 'v1', 1, ?, 0, 'טיוטה', 'gray', ?, ?, ?)
+        """,
+        (
+            new_id,
+            new_name,
+            source["family"],
+            source["domain"],
+            source["owner"],
+            source["segments_count"],
+            last_updated,
+            source["description"],
+            source["rating_scale_id"],
+        ),
+    )
+    links = conn.execute(
+        "SELECT questionnaire_id, weight FROM model_questionnaires WHERE model_id = ? ORDER BY position ASC",
+        (source_id,),
+    ).fetchall()
+    _replace_model_questionnaires(
+        conn, new_id, [{"id": link["questionnaire_id"], "weight": link["weight"]} for link in links]
+    )
+    conn.commit()
+    conn.close()
+    return get_model(new_id)
 
 
 STATUS_TONE = {"טיוטה": "gray", "פעיל": "green"}
@@ -2635,6 +2708,13 @@ def delete_model(model_id: str):
     conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
     conn.commit()
     conn.close()
+
+
+def rankings_for_model(model_id: str):
+    conn = get_connection()
+    rows = [dict(r) for r in conn.execute("SELECT id, code FROM rankings WHERE model_id = ?", (model_id,)).fetchall()]
+    conn.close()
+    return rows
 
 
 def _rating_scale_level_counts(conn):
@@ -2959,6 +3039,24 @@ def delete_questionnaire(questionnaire_id: str):
     conn.execute("DELETE FROM questionnaires WHERE id = ?", (questionnaire_id,))
     conn.commit()
     conn.close()
+
+
+def models_using_questionnaire(questionnaire_id: str):
+    conn = get_connection()
+    rows = [
+        dict(r)
+        for r in conn.execute(
+            """
+            SELECT m.id AS id, m.name AS name
+            FROM model_questionnaires mq
+            JOIN models m ON m.id = mq.model_id
+            WHERE mq.questionnaire_id = ?
+            """,
+            (questionnaire_id,),
+        ).fetchall()
+    ]
+    conn.close()
+    return rows
 
 
 def duplicate_questionnaire(source_id: str, new_id: str, new_name: str, created_date: str):
@@ -3700,7 +3798,13 @@ def update_notification_type_email(type_id: str, notification_email: str | None)
     return get_notification_type(type_id)
 
 
-def _create_notification(type_id: str, entity_id: str | None, message: str, override_email: str | None = None):
+def _create_notification(
+    type_id: str,
+    entity_id: str | None,
+    message: str,
+    override_email: str | None = None,
+    actor_user_id: str | None = None,
+):
     """Logs a real notification event to the יומן ביקורת, and — for types
     whose channel includes email and that have a notification_email
     configured — actually sends it via SMTP (see email_sender.py).
@@ -3709,7 +3813,12 @@ def _create_notification(type_id: str, entity_id: str | None, message: str, over
     notification is about one person's record rather than a broadcast.
     email_status records what really happened: 'sent', 'failed' (with
     email_error set), or 'not_configured' (email channel wanted but no
-    address set, or no SMTP_* env vars configured)."""
+    address set, or no SMTP_* env vars configured). actor_user_id is who
+    the log attributes the triggering action to (a users.id) — there's no
+    login/session in this app, so callers pass along whatever owner/
+    created_by field the affected record already has; None means the
+    event wasn't tied to a specific user (e.g. the lazy expiry check) and
+    displays as מערכת."""
     conn = get_connection()
     ntype = conn.execute("SELECT * FROM notification_types WHERE id = ?", (type_id,)).fetchone()
     email_to = None
@@ -3725,11 +3834,11 @@ def _create_notification(type_id: str, entity_id: str | None, message: str, over
             email_status = "not_configured"
     conn.execute(
         "INSERT INTO notifications "
-        "(notification_type_id, entity_id, message, created_at, email_sent_to, email_status, email_error) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "(notification_type_id, entity_id, message, created_at, email_sent_to, email_status, email_error, actor_user_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             type_id, entity_id, message, datetime.now().isoformat(timespec="seconds"),
-            email_to, email_status, email_error,
+            email_to, email_status, email_error, actor_user_id,
         ),
     )
     conn.commit()
@@ -3781,11 +3890,13 @@ def get_all_notifications():
         ).fetchall()
     ]
     types_by_id = {t["id"]: t for t in conn.execute("SELECT * FROM notification_types").fetchall()}
+    names_by_user_id = {row["id"]: row["full_name"] for row in conn.execute("SELECT id, full_name FROM users").fetchall()}
     conn.close()
     for row in rows:
         ntype = types_by_id.get(row["notification_type_id"])
         row["type_name"] = ntype["name"] if ntype else row["notification_type_id"]
         row["channels"] = [c for c in (ntype["channels"] or "").split(",") if c] if ntype else []
+        row["actor_name"] = names_by_user_id.get(row["actor_user_id"], "מערכת") if row["actor_user_id"] else "מערכת"
     return rows
 
 

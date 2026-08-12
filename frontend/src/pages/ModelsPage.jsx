@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { Badge, PageHeader, ErrorBanner, ConfirmDialog } from "../components/ui.jsx";
 import ModelModal from "../components/ModelModal.jsx";
+import DuplicateModelModal from "../components/DuplicateModelModal.jsx";
 import { FilterableTableHead } from "../components/FilterableTh.jsx";
 import { useColumnFilters } from "../hooks/useColumnFilters.js";
 
@@ -36,6 +37,7 @@ export default function ModelsPage() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [duplicateTarget, setDuplicateTarget] = useState(null);
 
   const loadModels = useCallback(() => {
     setLoading(true);
@@ -61,6 +63,14 @@ export default function ModelsPage() {
       .deleteModel(model.id)
       .then(() => loadModels())
       .catch((err) => setError(err.message));
+  }
+
+  function handleEdit(model) {
+    if (model.status === "פעיל") {
+      setError(`לא ניתן לערוך את המודל "${model.name}" בעודו בסטטוס "פעיל". יש להחזירו לטיוטה תחילה.`);
+      return;
+    }
+    setModal({ mode: "edit", model });
   }
 
   function toggleStatus(model) {
@@ -161,13 +171,16 @@ export default function ModelsPage() {
                 <td style={{ padding: "12px 16px", display: "flex", gap: 10 }}>
                   <button
                     type="button"
+                    onClick={() => setDuplicateTarget(r)}
+                    aria-label="שכפול"
                     style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-mid)" }}
                   >
                     ⧉
                   </button>
                   <button
                     type="button"
-                    onClick={() => setModal({ mode: "edit", model: r })}
+                    onClick={() => handleEdit(r)}
+                    aria-label="עריכה"
                     style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-mid)" }}
                   >
                     ✎
@@ -205,6 +218,17 @@ export default function ModelsPage() {
           message={`למחוק את המודל "${deleteTarget.name}"?`}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={confirmDelete}
+        />
+      )}
+
+      {duplicateTarget && (
+        <DuplicateModelModal
+          source={duplicateTarget}
+          onCancel={() => setDuplicateTarget(null)}
+          onSaved={() => {
+            setDuplicateTarget(null);
+            loadModels();
+          }}
         />
       )}
     </div>

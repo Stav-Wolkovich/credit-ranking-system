@@ -63,6 +63,14 @@ export default function QuestionnairesPage() {
       .catch((err) => setError(err.message));
   }
 
+  function handleEdit(questionnaire) {
+    if (questionnaire.status === "פעיל") {
+      setError(`לא ניתן לערוך את השאלון "${questionnaire.name}" בעודו בסטטוס "פעיל". יש להחזירו לטיוטה תחילה.`);
+      return;
+    }
+    setModal({ mode: "edit", questionnaire });
+  }
+
   function toggleStatus(questionnaire) {
     const nextStatus = questionnaire.status === "פעיל" ? "טיוטה" : "פעיל";
     api
@@ -165,7 +173,7 @@ export default function QuestionnairesPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setModal({ mode: "edit", questionnaire: r })}
+                    onClick={() => handleEdit(r)}
                     aria-label="עריכה"
                     style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-mid)" }}
                   >

@@ -97,6 +97,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  duplicateModel: (id, payload) =>
+    request(`/models/${id}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getRatingScales: () => request("/rating-scales"),
   getRatingScale: (id) => request(`/rating-scales/${id}`),
   createRatingScale: (scale) =>
