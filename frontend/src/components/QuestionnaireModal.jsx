@@ -377,6 +377,8 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
     setParameters((prev) => prev.filter((_, i) => i !== index));
   }
 
+  const totalWeight = parameters.reduce((sum, p) => sum + (Number(p.weight) || 0), 0);
+
   function validate() {
     const missing = new Set();
     if (!form.id.trim()) missing.add("id");
@@ -386,6 +388,10 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
       parameters.map((p, i) => (p.type === "מטריצה" && !p.matrix_id ? i : null)).filter((i) => i !== null)
     );
     setMatrixErrors(missingMatrix);
+    if (totalWeight > 100) {
+      setError(`סך אחוזי המשקל של הפרמטרים חורג מ-100% (סה"כ: ${totalWeight}%)`);
+      return false;
+    }
     return missing.size === 0 && missingMatrix.size === 0;
   }
 
@@ -534,7 +540,21 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
               />
             </div>
 
-            <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 6 }}>פרמטרים</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontSize: 12.5, color: "var(--text-mid)" }}>פרמטרים</div>
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 700,
+                  padding: "2px 10px",
+                  borderRadius: 12,
+                  background: totalWeight > 100 ? "#fbe9e9" : "#eceef1",
+                  color: totalWeight > 100 ? "#b52d2d" : "var(--text-mid)",
+                }}
+              >
+                סה"כ משקל: {totalWeight}%
+              </span>
+            </div>
             {parameters.map((p, i) => (
               <ParameterEditor
                 key={i}

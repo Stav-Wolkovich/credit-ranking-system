@@ -546,21 +546,29 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
               <button
                 type="button"
                 onClick={() => runStatusAction("self_approve")}
-                disabled={busy}
-                style={{ ...STATUS_ACTION_BUTTON_STYLE, color: "var(--text-mid)", opacity: busy ? 0.7 : 1 }}
+                disabled={busy || !result?.complete}
+                title={!result?.complete ? "יש להשלים את כל השאלונים (100%) לפני העברה לתור אישורים" : undefined}
+                style={{
+                  ...STATUS_ACTION_BUTTON_STYLE,
+                  color: "var(--text-mid)",
+                  opacity: busy || !result?.complete ? 0.5 : 1,
+                  cursor: !result?.complete ? "not-allowed" : "pointer",
+                }}
               >
                 אישור עצמי
               </button>
               <button
                 type="button"
                 onClick={() => runStatusAction("submit")}
-                disabled={busy}
+                disabled={busy || !result?.complete}
+                title={!result?.complete ? "יש להשלים את כל השאלונים (100%) לפני העברה לתור אישורים" : undefined}
                 style={{
                   ...STATUS_ACTION_BUTTON_STYLE,
                   background: "var(--accent)",
                   color: "#fff",
                   border: "none",
-                  opacity: busy ? 0.7 : 1,
+                  opacity: busy || !result?.complete ? 0.5 : 1,
+                  cursor: !result?.complete ? "not-allowed" : "pointer",
                 }}
               >
                 {statusAction === "submit" ? "שולח…" : "הגשה לאישור"}

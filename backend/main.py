@@ -450,6 +450,10 @@ PROCESS_STATUS_ACTIONS = {
     "cancel": ("בוטל", "red"),
 }
 PROCESS_TERMINAL_STATUSES = {"בוטל", "אושר בוועדה", "בתוקף"}
+# submit/self_approve both move a process into תור אישורים (the manager or
+# committee queue, respectively) — only allowed once every parameter has an
+# answer.
+APPROVAL_QUEUE_ACTIONS = {"submit", "self_approve"}
 
 
 @app.post("/api/processes/{process_id}/status-action")
@@ -461,6 +465,11 @@ def apply_process_status_action(process_id: str, payload: ProcessStatusAction):
         raise HTTPException(status_code=422, detail="פעולה לא תקינה")
     if process["status"] in PROCESS_TERMINAL_STATUSES:
         raise HTTPException(status_code=409, detail="לא ניתן לשנות סטטוס לתהליך שהושלם או בוטל")
+    if payload.action in APPROVAL_QUEUE_ACTIONS and (process["completion"] or 0) < 100:
+        raise HTTPException(
+            status_code=409,
+            detail=f"לא ניתן להעביר תהליך לתור אישורים לפני השלמת כל השאלונים (השלמה נוכחית: {process['completion'] or 0}%)",
+        )
     status, tone = PROCESS_STATUS_ACTIONS[payload.action]
     return database.update_process_status(process_id, status, tone)
 
@@ -863,6 +872,12 @@ def _clean_questionnaire_input(payload: QuestionnaireInput):
                 "matrix_id": matrix_id,
             }
         )
+    total_weight = sum(p["weight"] for p in parameters)
+    if total_weight > 100:
+        raise HTTPException(
+            status_code=422,
+            detail=f"סך אחוזי המשקל של הפרמטרים חורג מ-100% (סה\"כ: {total_weight}%)",
+        )
     return {
         "id": questionnaire_id,
         "name": name,
@@ -1131,6 +1146,33 @@ def duplicate_matrix(matrix_id: str, payload: MatrixDuplicateInput):
     if database.matrix_name_taken(new_name):
         raise HTTPException(status_code=409, detail="מטריצה עם שם זה כבר קיימת")
     return database.duplicate_matrix(matrix_id, new_id, new_name)
+
+
+def _matrix_blocker_message(matrix_name: str, blockers: list[dict]) -> str:
+    parts = []
+    for b in blockers:
+        ids = ", ".join(b["process_ids"][:5])
+        if len(b["process_ids"]) > 5:
+            ids += f" ועוד {len(b['process_ids']) - 5} נוספים"
+        if b["via"] == "model":
+            parts.append(f'המודל "{b["model_name"]}" ({b["model_id"]}) — תהליכים: {ids}')
+        else:
+            parts.append(
+                f'השאלון "{b["questionnaire_name"]}" ({b["questionnaire_id"]}) '
+                f'המקושר למודל "{b["model_name"]}" ({b["model_id"]}) — תהליכים: {ids}'
+            )
+    return f'לא ניתן למחוק את המטריצה "{matrix_name}" — היא משויכת ל: ' + "; ".join(parts) + "."
+
+
+@app.delete("/api/matrices/{matrix_id}", status_code=204)
+def delete_matrix(matrix_id: str):
+    matrix = database.get_matrix(matrix_id)
+    if not matrix:
+        raise HTTPException(status_code=404, detail="מטריצה לא נמצאה")
+    blockers = database.matrix_delete_blockers(matrix_id)
+    if blockers:
+        raise HTTPException(status_code=409, detail=_matrix_blocker_message(matrix["name"], blockers))
+    database.delete_matrix(matrix_id)
 
 
 @app.get("/api/reports")

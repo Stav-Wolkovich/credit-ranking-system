@@ -187,6 +187,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(matrix),
     }),
+  deleteMatrix: (id) => request(`/matrices/${id}`, { method: "DELETE" }),
   duplicateMatrix: (id, payload) =>
     request(`/matrices/${id}/duplicate`, {
       method: "POST",

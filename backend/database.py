@@ -18,14 +18,19 @@ ranking and its process are the same תהליך, just displayed on two
 different pages), plus a valid_from/valid_until window derived from
 approval_date.
 
-Canonical ranking statuses: טיוטה, בעבודה, ממתין לאישור, הוחזר, מאושר,
-ממתין לוועדה, אושר ועדה, בתוקף, פג תוקף — plus the legacy בוטל/מושהה
-still used by a couple of seed rows.
-
-ranking_processes.status also includes נדחה בועדה: the ועדה rejected the
-model's computed rating and recorded its own final_rating instead (see
-reject_committee_process()). The process leaves the committee queue but
-isn't otherwise terminal.
+rankings.status always mirrors ranking_processes.status (same string,
+same tone) — they're two views of the same תהליך, so every function that
+changes one also writes the other (update_process_status(),
+activate_process(), reject_manager_process(), reject_committee_process()).
+init_db() also runs a reconciliation pass on every startup that deletes
+any row whose id doesn't exist in both tables and re-syncs status/tone
+for any that still disagree, as a safety net against drift from before
+that discipline existed. Status values in current use: טיוטה, בתהליך,
+ממתין לוועדה, הוחזר, בתוקף, פג תוקף, נדחה בועדה (the ועדה rejected the
+model's computed rating and recorded its own final_rating instead — see
+reject_committee_process(); leaves the committee queue but isn't
+otherwise terminal) — plus the legacy אושר בוועדה/בוטל/מושהה still used
+by a couple of seed rows.
 
 Ranking Processes columns are the fields the processes page displays: id,
 subject_issuer_id, code, framework_issuer_id, status, tone, final_score,
@@ -213,10 +218,10 @@ from . import email_sender
 DB_PATH = Path(__file__).parent / "rankings.db"
 
 SEED_ROWS = [
-    {"id": "RP-2026-00031", "status": "ממתין לאישור", "tone": "amber", "model_id": "CORP-IL", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "מנפיק", "code": "LOAN-34285", "subject_issuer_id": "10000380", "approval_date": None},
+    {"id": "RP-2026-00031", "status": "בתהליך", "tone": "blue", "model_id": "CORP-IL", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "מנפיק", "code": "LOAN-34285", "subject_issuer_id": "10000380", "approval_date": None},
     {"id": "RP-2026-00030", "status": "טיוטה", "tone": "gray", "model_id": "REAL-EST", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "מנפיק", "code": "LOAN-34285", "subject_issuer_id": "10000380", "approval_date": None},
-    {"id": "RP-2026-00025", "status": "אושר ועדה", "tone": "green", "model_id": "CORP-IL", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "נכס", "code": "LOAN-33957", "subject_issuer_id": "10000380", "approval_date": "2026-06-01"},
-    {"id": "RP-2026-00024", "status": "בעבודה", "tone": "blue", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "נכס", "code": "LOAN-34285", "subject_issuer_id": "10000380", "approval_date": None},
+    {"id": "RP-2026-00025", "status": "אושר בוועדה", "tone": "green", "model_id": "CORP-IL", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "נכס", "code": "LOAN-33957", "subject_issuer_id": "10000380", "approval_date": "2026-06-01"},
+    {"id": "RP-2026-00024", "status": "בתהליך", "tone": "blue", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000380", "kind": "נכס", "code": "LOAN-34285", "subject_issuer_id": "10000380", "approval_date": None},
     {"id": "RP-2026-00023", "status": "בוטל", "tone": "red", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000399", "kind": "נכס", "code": "LOAN-23967", "subject_issuer_id": "10000399", "approval_date": None},
     {"id": "RP-2026-00022", "status": "מושהה", "tone": "amber", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000364", "kind": "נכס", "code": "LOAN-23486", "subject_issuer_id": "10000364", "approval_date": None},
     {"id": "RP-2026-00019", "status": "בתוקף", "tone": "green", "model_id": "RE-PROJ", "team_id": "INV-TEAM", "framework_issuer_id": "10000479", "kind": "נכס", "code": "LOAN-23903", "subject_issuer_id": "10000479", "approval_date": "2025-08-15"},
@@ -237,37 +242,35 @@ SEED_PROCESS_ROWS = [
     {"id": "RP-2026-00022", "subject_issuer_id": "10000364", "code": "LOAN-23486", "framework_issuer_id": "10000364", "status": "מושהה", "tone": "amber", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
     {"id": "RP-2026-00019", "subject_issuer_id": "10000479", "code": "LOAN-23903", "framework_issuer_id": "10000479", "status": "בתוקף", "tone": "green", "final_score": 7.00, "final_rating": "A-", "computed_score": 5.26, "computed_rating": "A+", "completion": 0},
     {"id": "RP-2026-00018", "subject_issuer_id": "10000365", "code": "LOAN-9904", "framework_issuer_id": "10000365", "status": "בתוקף", "tone": "green", "final_score": 6.00, "final_rating": "A", "computed_score": 3.07, "computed_rating": "AA", "completion": 0},
-    {"id": "RP-2026-00017", "subject_issuer_id": None, "code": "-", "framework_issuer_id": None, "status": "טיוטה", "tone": "gray", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
-    {"id": "RP-2026-00016", "subject_issuer_id": "10000484", "code": "POLI-IL", "framework_issuer_id": None, "status": "פיקטיבי", "tone": "amber", "final_score": None, "final_rating": None, "computed_score": None, "computed_rating": None, "completion": 0},
 ]
 
 SEED_ISSUER_ROWS = [
-    {"id": "10000364", "name": "WALL STREET 60", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000399", "name": "Allianz Archimedes SUZIE INVESTMENT", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000479", "name": "Allianz – Centinela", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000365", "name": "Allianz euNetworks Holdings Limited", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000484", "name": "Allianz - Financiere Vendome II Diam Coc (EPC 3)", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000366", "name": "Allianz - Porterbrook Ulfstead Midco Limited", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000367", "name": "Allianz - project hercules", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000368", "name": "Allianz - Project Runde", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000530", "name": "Allianz - Rotera TRENDBELL DESIGNATED ACTIVITY COMPANY", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000497", "name": "Allianz (EPC 3) – Mehler", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000380", "name": "חשבון מנוהל - Fuse Funding", "type": None, "sector": None, "country": None, "active": True},
-    {"id": "10000381", "name": "Third Ave", "type": None, "sector": None, "country": None, "active": True},
-    {"id": "10000382", "name": "Constellation", "type": None, "sector": None, "country": None, "active": True},
+    {"id": "10000364", "name": "Meridian Capital Partners", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000399", "name": "Northbridge Holdings Ltd", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000479", "name": "Silverlake Ventures", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000365", "name": "Cedarcrest Investments Limited", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000484", "name": "Harborview Group Holdings", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000366", "name": "Falcon Ridge Partners Limited", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000367", "name": "Ashfield Industries", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000368", "name": "Brightstone Capital Group", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000530", "name": "Wavecrest Designated Activity Company", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000497", "name": "Ironwood Partners", "type": None, "sector": None, "country": None, "active": False},
+    {"id": "10000380", "name": "חשבון מנוהל - Clearwater Capital", "type": None, "sector": None, "country": None, "active": True},
+    {"id": "10000381", "name": "Oakstone Capital Group", "type": None, "sector": None, "country": None, "active": True},
+    {"id": "10000382", "name": "Ridgeline Partners", "type": None, "sector": None, "country": None, "active": True},
 ]
 
 SEED_ASSET_ROWS = [
-    {"id": "737", "name": "Real Estate Development LOAN A, LLC 1002", "type": "FRAMEWORK", "issuer_id": "10000380", "cycle_stage": None, "active": True},
-    {"id": "445", "name": "Third Owners LLC-Building 368", "type": "FRAMEWORK", "issuer_id": "10000381", "cycle_stage": None, "active": True},
-    {"id": "166", "name": "wall owner lp 60", "type": "FRAMEWORK", "issuer_id": "10000364", "cycle_stage": None, "active": True},
-    {"id": "455", "name": "Allianz Archimedes SUZIE INVESTMENT", "type": "FRAMEWORK", "issuer_id": "10000399", "cycle_stage": None, "active": True},
-    {"id": "729", "name": "Allianz – Constellation", "type": "FRAMEWORK", "issuer_id": "10000382", "cycle_stage": None, "active": True},
-    {"id": "598", "name": "Allianz - Diam Coc (EPC 3)", "type": "FRAMEWORK", "issuer_id": "10000484", "cycle_stage": None, "active": True},
-    {"id": "486", "name": "Allianz - project hercules 21.12.22", "type": "FRAMEWORK", "issuer_id": "10000367", "cycle_stage": None, "active": True},
-    {"id": "615", "name": "Allianz - Project Impulse (EPC 3)", "type": "FRAMEWORK", "issuer_id": "10000497", "cycle_stage": None, "active": False},
-    {"id": "407", "name": "Allianz - Project Runde", "type": "FRAMEWORK", "issuer_id": "10000368", "cycle_stage": None, "active": True},
-    {"id": "762", "name": "Allianz - Rotera TRENDBELL DESIGNATED ACTIVITY COMPANY", "type": "FRAMEWORK", "issuer_id": "10000530", "cycle_stage": None, "active": True},
+    {"id": "737", "name": "Real Estate Development Loan A, LLC 4210", "type": "FRAMEWORK", "issuer_id": "10000380", "cycle_stage": None, "active": True},
+    {"id": "445", "name": "Parkview Owners LLC - Building 214", "type": "FRAMEWORK", "issuer_id": "10000381", "cycle_stage": None, "active": True},
+    {"id": "166", "name": "Riverside Owner LP 42", "type": "FRAMEWORK", "issuer_id": "10000364", "cycle_stage": None, "active": True},
+    {"id": "455", "name": "Cobalt Archimedes Investment", "type": "FRAMEWORK", "issuer_id": "10000399", "cycle_stage": None, "active": True},
+    {"id": "729", "name": "Stonebridge - Horizon Point", "type": "FRAMEWORK", "issuer_id": "10000382", "cycle_stage": None, "active": True},
+    {"id": "598", "name": "Cobalt - Diamond Cove (EPC 3)", "type": "FRAMEWORK", "issuer_id": "10000484", "cycle_stage": None, "active": True},
+    {"id": "486", "name": "Stonebridge - project Atlas 14.03.23", "type": "FRAMEWORK", "issuer_id": "10000367", "cycle_stage": None, "active": True},
+    {"id": "615", "name": "Cobalt - Project Momentum (EPC 3)", "type": "FRAMEWORK", "issuer_id": "10000497", "cycle_stage": None, "active": False},
+    {"id": "407", "name": "Stonebridge - Project Aurora", "type": "FRAMEWORK", "issuer_id": "10000368", "cycle_stage": None, "active": True},
+    {"id": "762", "name": "Stonebridge - Larkspur Gateway Designated Activity Company", "type": "FRAMEWORK", "issuer_id": "10000530", "cycle_stage": None, "active": True},
 ]
 
 SEED_MODEL_ROWS = [
@@ -667,6 +670,19 @@ def get_connection():
 def init_db():
     conn = get_connection()
 
+    # Marks which tables have already run their one-time seed insert, so
+    # deliberately deleting every row (e.g. an admin clearing all תהליכי
+    # דירוג) doesn't look like a fresh install and get silently re-seeded
+    # on the next startup. Seeding is a one-time event per table, not a
+    # "table is currently empty" check.
+    conn.execute("CREATE TABLE IF NOT EXISTS seed_state (key TEXT PRIMARY KEY)")
+
+    def already_seeded(key: str) -> bool:
+        return conn.execute("SELECT 1 FROM seed_state WHERE key = ?", (key,)).fetchone() is not None
+
+    def mark_seeded(key: str):
+        conn.execute("INSERT OR IGNORE INTO seed_state (key) VALUES (?)", (key,))
+
     # Older schemas had `model`/`team`/`framework`/`subject` as NOT NULL text
     # columns before they were migrated to model_id/team_id/framework_issuer_id
     # (or framework_asset_id)/subject_issuer_id. SQLite can't drop a NOT NULL
@@ -728,7 +744,7 @@ def init_db():
     if "data_date" not in rankings_columns:
         conn.execute("ALTER TABLE rankings ADD COLUMN data_date TEXT")
     row_count = conn.execute("SELECT COUNT(*) FROM rankings").fetchone()[0]
-    if row_count == 0:
+    if row_count == 0 and not already_seeded("rankings"):
         conn.executemany(
             """
             INSERT INTO rankings
@@ -738,8 +754,10 @@ def init_db():
             """,
             SEED_ROWS,
         )
+        mark_seeded("rankings")
         conn.commit()
     else:
+        mark_seeded("rankings")
         # Backfill rows created before the canonical status set / approval_date /
         # model_id / framework_issuer_id / subject_issuer_id / team_id existed.
         # Only touches rows still on their old status string or missing an id,
@@ -846,7 +864,7 @@ def init_db():
     if "rejection_comment" not in process_columns:
         conn.execute("ALTER TABLE ranking_processes ADD COLUMN rejection_comment TEXT")
     process_count = conn.execute("SELECT COUNT(*) FROM ranking_processes").fetchone()[0]
-    if process_count == 0:
+    if process_count == 0 and not already_seeded("ranking_processes"):
         conn.executemany(
             """
             INSERT INTO ranking_processes
@@ -858,8 +876,10 @@ def init_db():
             """,
             SEED_PROCESS_ROWS,
         )
+        mark_seeded("ranking_processes")
         conn.commit()
     else:
+        mark_seeded("ranking_processes")
         # Backfill computed_score/computed_rating/subject_issuer_id/
         # framework_issuer_id for rows created before these columns existed,
         # without clobbering any later real edit.
@@ -887,6 +907,26 @@ def init_db():
                     (seed["framework_issuer_id"], seed["id"]),
                 )
         conn.commit()
+
+    # rankings and ranking_processes must always represent the same set of
+    # תהליכים (same id in both), with the same status/tone — the report
+    # page and the processes page are two views of the same data (see
+    # module docstring). Every status-changing function now updates both
+    # rows together, but this reconciliation runs on every startup as a
+    # safety net for any drift already persisted (e.g. from before that
+    # was true) and for orphan rows that only ever landed in one table.
+    conn.execute("DELETE FROM ranking_processes WHERE id NOT IN (SELECT id FROM rankings)")
+    conn.execute("DELETE FROM rankings WHERE id NOT IN (SELECT id FROM ranking_processes)")
+    conn.execute(
+        """
+        UPDATE rankings
+        SET status = (SELECT status FROM ranking_processes WHERE ranking_processes.id = rankings.id),
+            tone = (SELECT tone FROM ranking_processes WHERE ranking_processes.id = rankings.id)
+        WHERE id IN (SELECT id FROM ranking_processes)
+          AND status != (SELECT status FROM ranking_processes WHERE ranking_processes.id = rankings.id)
+        """
+    )
+    conn.commit()
 
     conn.execute(
         """
@@ -1644,15 +1684,26 @@ def get_ranking(ranking_id: str):
 
 
 def update_ranking_status(ranking_id: str, status: str, tone: str | None):
+    """Also updates the matching ranking_processes row (same id — same
+    תהליך) so the report page and the processes page agree, mirroring
+    update_process_status()'s side of this sync."""
     conn = get_connection()
     if tone:
         conn.execute(
             "UPDATE rankings SET status = ?, tone = ? WHERE id = ?",
             (status, tone, ranking_id),
         )
+        conn.execute(
+            "UPDATE ranking_processes SET status = ?, tone = ? WHERE id = ?",
+            (status, tone, ranking_id),
+        )
     else:
         conn.execute(
             "UPDATE rankings SET status = ? WHERE id = ?",
+            (status, ranking_id),
+        )
+        conn.execute(
+            "UPDATE ranking_processes SET status = ? WHERE id = ?",
             (status, ranking_id),
         )
     conn.commit()
@@ -1787,9 +1838,16 @@ def count_processes_by_status(status: str):
 
 
 def update_process_status(process_id: str, status: str, tone: str):
+    """Updates both ranking_processes and its matching rankings row (same
+    id — same תהליך, see module docstring) so the report page and the
+    processes page always agree on status/tone."""
     conn = get_connection()
     conn.execute(
         "UPDATE ranking_processes SET status = ?, tone = ? WHERE id = ?",
+        (status, tone, process_id),
+    )
+    conn.execute(
+        "UPDATE rankings SET status = ?, tone = ? WHERE id = ?",
         (status, tone, process_id),
     )
     conn.commit()
@@ -1852,11 +1910,17 @@ def reject_committee_process(process_id: str, final_rating: str, comment: str):
     visible side by side (the processes/approvals pages already show
     ציון/דירוג מחושב and ציון/דירוג סופי as separate columns). The process
     leaves the committee queue: status moves to "נדחה בועדה", and the
-    comment explaining the change is saved and emailed to the owner."""
+    comment explaining the change is saved and emailed to the owner. The
+    matching rankings row (same id) is synced to the same status/tone so
+    the report page and the processes page agree."""
     conn = get_connection()
     conn.execute(
         "UPDATE ranking_processes SET final_rating = ?, status = ?, tone = ?, rejection_comment = ? WHERE id = ?",
         (final_rating, "נדחה בועדה", "red", comment, process_id),
+    )
+    conn.execute(
+        "UPDATE rankings SET status = ?, tone = ? WHERE id = ?",
+        ("נדחה בועדה", "red", process_id),
     )
     conn.commit()
     conn.close()
@@ -1872,11 +1936,17 @@ def reject_manager_process(process_id: str, comment: str):
     """A manager can return a submitted process to the analyst with
     feedback instead of approving it: status moves to "הוחזר" (leaving the
     manager queue, which only shows בתהליך), the comment is saved, and the
-    owner is emailed directly so they know the rating needs revision."""
+    owner is emailed directly so they know the rating needs revision. The
+    matching rankings row (same id) is synced to the same status/tone so
+    the report page and the processes page agree."""
     conn = get_connection()
     conn.execute(
         "UPDATE ranking_processes SET status = ?, tone = ?, rejection_comment = ? WHERE id = ?",
         ("הוחזר", "amber", comment, process_id),
+    )
+    conn.execute(
+        "UPDATE rankings SET status = ?, tone = ? WHERE id = ?",
+        ("הוחזר", "amber", process_id),
     )
     conn.commit()
     conn.close()
@@ -3399,6 +3469,81 @@ def matrix_name_taken(name: str, exclude_id: str | None = None):
         row = conn.execute("SELECT 1 FROM matrices WHERE name = ?", (name,)).fetchone()
     conn.close()
     return row is not None
+
+
+def matrix_delete_blockers(matrix_id: str):
+    """A matrix can't be deleted while it's in use by a model or
+    questionnaire that has a live תהליך דירוג: either the matrix's own
+    model (matrices.model_id is required) has a linked ranking, or some
+    questionnaire parameter uses this matrix (questionnaire_parameters.
+    matrix_id) and that questionnaire is linked to a model with a linked
+    ranking. Returns a list of blocker dicts (empty if deletion is safe)."""
+    conn = get_connection()
+    matrix = conn.execute("SELECT model_id FROM matrices WHERE id = ?", (matrix_id,)).fetchone()
+    if not matrix:
+        conn.close()
+        return []
+
+    def processes_for_model(model_id):
+        return [r["id"] for r in conn.execute("SELECT id FROM rankings WHERE model_id = ?", (model_id,)).fetchall()]
+
+    blockers = []
+    own_model_id = matrix["model_id"]
+    own_processes = processes_for_model(own_model_id)
+    if own_processes:
+        own_model = conn.execute("SELECT name FROM models WHERE id = ?", (own_model_id,)).fetchone()
+        blockers.append(
+            {
+                "via": "model",
+                "model_id": own_model_id,
+                "model_name": own_model["name"] if own_model else own_model_id,
+                "process_ids": own_processes,
+            }
+        )
+
+    questionnaire_rows = conn.execute(
+        """
+        SELECT DISTINCT qp.questionnaire_id, q.name
+        FROM questionnaire_parameters qp
+        JOIN questionnaires q ON q.id = qp.questionnaire_id
+        WHERE qp.matrix_id = ?
+        """,
+        (matrix_id,),
+    ).fetchall()
+    for qrow in questionnaire_rows:
+        model_rows = conn.execute(
+            """
+            SELECT m.id, m.name FROM model_questionnaires mq
+            JOIN models m ON m.id = mq.model_id
+            WHERE mq.questionnaire_id = ?
+            """,
+            (qrow["questionnaire_id"],),
+        ).fetchall()
+        for mrow in model_rows:
+            processes = processes_for_model(mrow["id"])
+            if processes:
+                blockers.append(
+                    {
+                        "via": "questionnaire",
+                        "questionnaire_id": qrow["questionnaire_id"],
+                        "questionnaire_name": qrow["name"],
+                        "model_id": mrow["id"],
+                        "model_name": mrow["name"],
+                        "process_ids": processes,
+                    }
+                )
+    conn.close()
+    return blockers
+
+
+def delete_matrix(matrix_id: str):
+    conn = get_connection()
+    conn.execute("DELETE FROM matrix_axis_values WHERE matrix_id = ?", (matrix_id,))
+    conn.execute("DELETE FROM matrix_cells WHERE matrix_id = ?", (matrix_id,))
+    conn.execute("UPDATE questionnaire_parameters SET matrix_id = NULL WHERE matrix_id = ?", (matrix_id,))
+    conn.execute("DELETE FROM matrices WHERE id = ?", (matrix_id,))
+    conn.commit()
+    conn.close()
 
 
 def _replace_matrix_grid(

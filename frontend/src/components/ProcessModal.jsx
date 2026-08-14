@@ -12,6 +12,7 @@ function todayIso() {
 
 export default function ProcessModal({ onCancel, onSaved }) {
   const [frameworkKind, setFrameworkKind] = useState("מנפיק");
+  const [assetIssuerId, setAssetIssuerId] = useState("");
   const [frameworkQuery, setFrameworkQuery] = useState("");
   const [frameworkSelected, setFrameworkSelected] = useState(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -36,7 +37,8 @@ export default function ProcessModal({ onCancel, onSaved }) {
     api.getUsers().then((res) => setUsers(res.rows)).catch((err) => setError(err.message));
   }, []);
 
-  const frameworkOptions = frameworkKind === "מנפיק" ? issuers : assets;
+  const frameworkOptions =
+    frameworkKind === "מנפיק" ? issuers : assets.filter((a) => a.issuer_id === assetIssuerId);
 
   const filteredOptions = useMemo(() => {
     const q = frameworkQuery.trim().toLowerCase();
@@ -50,7 +52,8 @@ export default function ProcessModal({ onCancel, onSaved }) {
     setFrameworkKind(kind);
     setFrameworkSelected(null);
     setFrameworkQuery("");
-    setDropdownOpen(true);
+    setAssetIssuerId("");
+    setDropdownOpen(kind === "מנפיק");
   }
 
   function selectFramework(option) {
@@ -61,11 +64,19 @@ export default function ProcessModal({ onCancel, onSaved }) {
   function clearFramework() {
     setFrameworkSelected(null);
     setFrameworkQuery("");
-    setDropdownOpen(true);
+    setDropdownOpen(frameworkKind === "מנפיק" || !!assetIssuerId);
+  }
+
+  function changeAssetIssuer(issuerId) {
+    setAssetIssuerId(issuerId);
+    setFrameworkSelected(null);
+    setFrameworkQuery("");
+    setDropdownOpen(!!issuerId);
   }
 
   function validate() {
     const missing = new Set();
+    if (frameworkKind === "נכס" && !assetIssuerId) missing.add("assetIssuer");
     if (!frameworkSelected) missing.add("framework");
     if (!modelId) missing.add("model");
     if (!ownerId) missing.add("owner");
@@ -166,6 +177,34 @@ export default function ProcessModal({ onCancel, onSaved }) {
             ))}
           </div>
 
+          {frameworkKind === "נכס" && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 4 }}>מנפיק *</div>
+              {fieldErrors.has("assetIssuer") && (
+                <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ יש לבחור מנפיק תחילה</div>
+              )}
+              <select
+                value={assetIssuerId}
+                onChange={(e) => changeAssetIssuer(e.target.value)}
+                style={{
+                  width: "100%",
+                  border: `1px solid ${fieldErrors.has("assetIssuer") ? "#e0a0a0" : "var(--border)"}`,
+                  borderRadius: 6,
+                  padding: "9px 12px",
+                  fontSize: 13,
+                  background: "#fff",
+                }}
+              >
+                <option value="">בחר מנפיק</option>
+                {issuers.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name} ({i.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {frameworkSelected ? (
             <div
               style={{
@@ -190,6 +229,10 @@ export default function ProcessModal({ onCancel, onSaved }) {
               >
                 ✕
               </button>
+            </div>
+          ) : frameworkKind === "נכס" && !assetIssuerId ? (
+            <div style={{ fontSize: 12, color: "var(--text-light)", padding: "6px 2px" }}>
+              יש לבחור מנפיק כדי לבחור נכס משויך אליו.
             </div>
           ) : (
             <div style={{ position: "relative" }}>
