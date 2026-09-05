@@ -25,12 +25,12 @@ activate_process(), reject_manager_process(), reject_committee_process()).
 init_db() also runs a reconciliation pass on every startup that deletes
 any row whose id doesn't exist in both tables and re-syncs status/tone
 for any that still disagree, as a safety net against drift from before
-that discipline existed. Status values in current use: טיוטה, בתהליך,
-ממתין לוועדה, הוחזר, בתוקף, פג תוקף, נדחה בועדה (the ועדה rejected the
-model's computed rating and recorded its own final_rating instead — see
-reject_committee_process(); leaves the committee queue but isn't
-otherwise terminal) — plus the legacy אושר בוועדה/בוטל/מושהה still used
-by a couple of seed rows.
+that discipline existed; it also migrates any row still on the legacy
+"נדחה בועדה" status (see below) to בתוקף. Status values in current use:
+טיוטה, בתהליך, ממתין לוועדה, הוחזר, בתוקף, פג תוקף — plus the legacy
+אושר בוועדה/בוטל/מושהה/נדחה בועדה still used by a couple of seed/legacy
+rows (the last two are never written by current code, only migrated
+away from).
 
 Ranking Processes columns are the fields the processes page displays: id,
 subject_issuer_id, code, framework_issuer_id, status, tone, final_score,
@@ -52,14 +52,28 @@ tone, approval_date = today) so the report page's valid_from/valid_until
 (approval_date + 1 year, see get_all_rankings()) and expiring-soon
 tracking start immediately, since both rows represent the same תהליך.
 At either stage the reviewer can instead reject with a required comment
-(saved to rejection_comment) — reject_manager_process() sends it back to
-"הוחזר" (leaving the manager queue) and reject_committee_process() to
-"נדחה בועדה" (leaving the committee queue, recording its own
-final_rating instead of the model's computed_rating). Both email the
-process's owner (ranking_processes.owner, a users.id set at creation)
-directly via _email_process_owner(), reusing the RATING_RETURNED
-notification type's channels but targeting that specific person instead
-of the type's shared configured address. Neither status is terminal —
+(saved to rejection_comment), but the two rejections behave very
+differently — a manager rejection means the analyst has to run the
+תהליך again, a committee rejection doesn't:
+  - reject_manager_process() sends the process back to "הוחזר" (leaving
+    the manager queue, which only shows בתהליך) — the analyst fixes it
+    and resubmits (הגשה לאישור from the scoring modal, back to בתהליך).
+  - reject_committee_process() only rejects the model's *computed*
+    rating, not the process — the ועדה records its own final_rating
+    instead (computed_rating stays untouched so both are visible side by
+    side) and the process becomes בתוקף immediately, exactly like a
+    plain committee approval (same activate_process()-style sync to the
+    matching rankings row, approval_date included). It is NOT sent back
+    to the analyst and won't run again. The scoring modal and approval
+    review modal distinguish this "committee overrode the computed
+    rating" case from a plain approval by checking rejection_comment is
+    set and final_rating != computed_rating, not by status, since both
+    end up בתוקף.
+Both email the process's owner (ranking_processes.owner, a users.id set
+at creation) directly via _email_process_owner() — reject_manager_process()
+with the RATING_RETURNED type, reject_committee_process() with
+RATING_COMMITTEE_OVERRIDE — targeting that specific person instead of
+the type's shared configured address. Only הוחזר is non-terminal —
 הגשה לאישور from the scoring modal resubmits either back to בתהליך.
 
 Issuers columns are the fields the issuers page displays: id (issuer
@@ -614,6 +628,15 @@ SEED_NOTIFICATION_TYPE_ROWS = [
         "notification_email": None,
     },
     {
+        "id": "RATING_COMMITTEE_OVERRIDE",
+        "name": "ועדה קבעה דירוג סופי שונה מהמחושב",
+        "trigger_description": "ועדה דחתה את הדירוג המחושב וקבעה דירוג סופי חלופי; התהליך הפך לבתוקף",
+        "recipient_role": "אנליסט",
+        "channels": "email,internal",
+        "timing": "מיידי",
+        "notification_email": None,
+    },
+    {
         "id": "RATING_PENDING_COMMITTEE",
         "name": "דירוג ממתין לוועדה",
         "trigger_description": "מאשר אישר ונדרש אישור ועדה",
@@ -917,6 +940,27 @@ def init_db():
     # was true) and for orphan rows that only ever landed in one table.
     conn.execute("DELETE FROM ranking_processes WHERE id NOT IN (SELECT id FROM rankings)")
     conn.execute("DELETE FROM rankings WHERE id NOT IN (SELECT id FROM ranking_processes)")
+
+    # A committee rejecting the computed rating only rejects the rating,
+    # not the process — it's a completed decision, not a return to the
+    # analyst — so reject_committee_process() now lands directly on
+    # בתוקף instead of the old "נדחה בועדה" resting status. Migrate any
+    # row still on that legacy status (from before this was true) the
+    # same way activate_process() would: בתוקף/green with approval_date
+    # stamped today if it isn't already set.
+    today = date.today().isoformat()
+    conn.execute(
+        "UPDATE ranking_processes SET status = 'בתוקף', tone = 'green' WHERE status = 'נדחה בועדה'"
+    )
+    conn.execute(
+        """
+        UPDATE rankings SET status = 'בתוקף', tone = 'green',
+            approval_date = COALESCE(approval_date, ?)
+        WHERE status = 'נדחה בועדה'
+        """,
+        (today,),
+    )
+
     conn.execute(
         """
         UPDATE rankings
@@ -1460,17 +1504,23 @@ def init_db():
         )
         """
     )
-    notification_type_count = conn.execute("SELECT COUNT(*) FROM notification_types").fetchone()[0]
-    if notification_type_count == 0:
-        conn.executemany(
-            """
-            INSERT INTO notification_types
-                (id, name, trigger_description, recipient_role, channels, timing, notification_email)
-            VALUES (:id, :name, :trigger_description, :recipient_role, :channels, :timing, :notification_email)
-            """,
-            SEED_NOTIFICATION_TYPE_ROWS,
-        )
-        conn.commit()
+    # This is a fixed reference catalog, not user data — unlike
+    # rankings/ranking_processes (where an empty table can mean "the user
+    # deliberately deleted everything"), there's no legitimate way for an
+    # admin to want a catalog type gone, so every seed row is kept
+    # present on every startup (INSERT OR IGNORE, keyed by id) rather
+    # than only inserting once when the table happens to be empty — that
+    # would silently skip any type added to SEED_NOTIFICATION_TYPE_ROWS
+    # after the table was first created.
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO notification_types
+            (id, name, trigger_description, recipient_role, channels, timing, notification_email)
+        VALUES (:id, :name, :trigger_description, :recipient_role, :channels, :timing, :notification_email)
+        """,
+        SEED_NOTIFICATION_TYPE_ROWS,
+    )
+    conn.commit()
 
     conn.execute(
         """
@@ -1884,19 +1934,19 @@ def activate_process(process_id: str):
     return get_process(process_id)
 
 
-def _email_process_owner(process_id: str, message: str):
+def _email_process_owner(process_id: str, message: str, notification_type_id: str = "RATING_RETURNED"):
     """Emails the process's owner (אחראי תהליך) directly, reusing the
-    RATING_RETURNED notification type for its email/internal channels —
-    override_email targets that specific person rather than the type's
-    shared configured address. No-ops (logs 'not_configured') if the
-    process has no owner or the owner has no email on file."""
+    given notification type's email/internal channels — override_email
+    targets that specific person rather than the type's shared configured
+    address. No-ops (logs 'not_configured') if the process has no owner
+    or the owner has no email on file."""
     process = get_process(process_id)
     owner_email = None
     if process and process.get("owner"):
         owner = get_user(process["owner"])
         owner_email = owner["email"] if owner else None
     _create_notification(
-        "RATING_RETURNED",
+        notification_type_id,
         process_id,
         message,
         override_email=owner_email,
@@ -1908,26 +1958,33 @@ def reject_committee_process(process_id: str, final_rating: str, comment: str):
     """The ועדה can reject the model's computed rating and record its own
     final_rating instead — computed_rating stays untouched so both are
     visible side by side (the processes/approvals pages already show
-    ציון/דירוג מחושב and ציון/דירוג סופי as separate columns). The process
-    leaves the committee queue: status moves to "נדחה בועדה", and the
-    comment explaining the change is saved and emailed to the owner. The
-    matching rankings row (same id) is synced to the same status/tone so
-    the report page and the processes page agree."""
+    ציון/דירוג מחושב and ציון/דירוג סופי as separate columns). Despite the
+    "rejection" framing, only the computed rating is rejected — not the
+    process itself — so it becomes בתוקף immediately, exactly like a
+    plain committee approval (see activate_process(): same status/tone
+    sync to the matching rankings row, same approval_date stamping). It
+    is NOT sent back to the analyst and won't be run again — that only
+    happens on a manager rejection (see reject_manager_process(), status
+    "הוחזר"). The comment explaining the override is saved and emailed to
+    the owner; the UI distinguishes this from a plain approval by
+    rejection_comment being set and final_rating != computed_rating."""
+    today = date.today().isoformat()
     conn = get_connection()
     conn.execute(
         "UPDATE ranking_processes SET final_rating = ?, status = ?, tone = ?, rejection_comment = ? WHERE id = ?",
-        (final_rating, "נדחה בועדה", "red", comment, process_id),
+        (final_rating, "בתוקף", "green", comment, process_id),
     )
     conn.execute(
-        "UPDATE rankings SET status = ?, tone = ? WHERE id = ?",
-        ("נדחה בועדה", "red", process_id),
+        "UPDATE rankings SET status = ?, tone = ?, approval_date = ? WHERE id = ?",
+        ("בתוקף", "green", today, process_id),
     )
     conn.commit()
     conn.close()
     process = get_process(process_id)
     _email_process_owner(
         process_id,
-        f"התהליך {process_id} ({process['code']}) נדחה על ידי הוועדה. דירוג סופי חדש: {final_rating}. הערה: {comment}",
+        f"התהליך {process_id} ({process['code']}) אושר על ידי הוועדה בדירוג סופי שונה מהמחושב: {final_rating}. הערה: {comment}",
+        notification_type_id="RATING_COMMITTEE_OVERRIDE",
     )
     return process
 
