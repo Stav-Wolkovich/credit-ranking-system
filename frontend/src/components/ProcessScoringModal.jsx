@@ -298,13 +298,15 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
   }
 
   const isTerminal = PROCESS_TERMINAL_STATUSES.has(process.status);
-  // A committee rejection activates the process straight to "בתוקף" with an
-  // overridden final_rating (see reject_committee_process()) instead of
-  // returning it to the analyst — rejection_comment is the only remaining
-  // signal that distinguishes that case from a plain committee approval or
-  // a manager return ("הוחזר", which doesn't set final_rating).
-  const committeeOverridden = Boolean(process.rejection_comment) && process.status !== "הוחזר";
   const busy = saving || statusAction !== null;
+  // A committee rejection only overrides the computed rating — the
+  // process itself becomes בתוקף immediately (see reject_committee_process()
+  // in the backend), so it's indistinguishable from a plain approval by
+  // status alone. Flag it by rejection_comment + a final rating that
+  // differs from the computed one instead.
+  const committeeOverride =
+    !!process.rejection_comment && process.status !== "הוחזר" && process.final_rating != null &&
+    process.final_rating !== process.computed_rating;
 
   return (
     <div
@@ -413,7 +415,11 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                   }}
                 >
                   <div style={{ fontSize: 11.5, color: "#b52d2d", fontWeight: 700, marginBottom: 4 }}>
-                    {process.status === "הוחזר" ? "הערת החזרה ממנהל" : "הערת דחייה מוועדה"}
+                    {process.status === "הוחזר"
+                      ? "הערת החזרה ממנהל — יש לתקן ולהגיש שוב"
+                      : committeeOverride
+                      ? "הערת ועדה — הדירוג הסופי נקבע בחריגה מהמחושב, התהליך בתוקף"
+                      : "הערת דחייה"}
                   </div>
                   <div style={{ fontSize: 12.5, color: "var(--text-dark)" }}>{process.rejection_comment}</div>
                 </div>
@@ -422,8 +428,8 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
               {process.final_rating && (
                 <div
                   style={{
-                    border: `1px solid ${committeeOverridden ? "#e0a0a0" : "var(--border)"}`,
-                    background: committeeOverridden ? "#fbe9e9" : "#f7f8fa",
+                    border: `1px solid ${committeeOverride ? "#e0a0a0" : "var(--border)"}`,
+                    background: committeeOverride ? "#fbe9e9" : "#f7f8fa",
                     borderRadius: 8,
                     padding: "10px 14px",
                     textAlign: "center",
@@ -435,7 +441,7 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                       style={{
                         fontSize: 18,
                         fontWeight: 700,
-                        color: committeeOverridden ? "#b52d2d" : "var(--text-dark)",
+                        color: committeeOverride ? "#b52d2d" : "var(--text-dark)",
                       }}
                     >
                       {process.final_rating}
@@ -444,9 +450,9 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                       <span style={{ fontSize: 13, color: "var(--text-mid)" }}>{process.final_score}</span>
                     )}
                   </div>
-                  {committeeOverridden && (
+                  {committeeOverride && (
                     <div style={{ fontSize: 11, color: "#b52d2d", marginTop: 4, fontWeight: 600 }}>
-                      ✕ שונה על ידי הוועדה — שונה מהדירוג המחושב
+                      ✕ שונה מהדירוג המחושב על ידי הוועדה — התהליך בתוקף ולא ירוץ שוב
                     </div>
                   )}
                 </div>
