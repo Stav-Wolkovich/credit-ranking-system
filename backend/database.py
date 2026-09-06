@@ -26,11 +26,12 @@ init_db() also runs a reconciliation pass on every startup that deletes
 any row whose id doesn't exist in both tables and re-syncs status/tone
 for any that still disagree, as a safety net against drift from before
 that discipline existed. Status values in current use: טיוטה, בתהליך,
-ממתין לוועדה, הוחזר, בתוקף, פג תוקף, נדחה בועדה (the ועדה rejected the
-model's computed rating and recorded its own final_rating instead — see
-reject_committee_process(); leaves the committee queue but isn't
-otherwise terminal) — plus the legacy אושר בוועדה/בוטל/מושהה still used
-by a couple of seed rows.
+ממתין לוועדה, הוחזר, בתוקף, פג תוקף — plus the legacy אושר בוועדה/בוטל/
+מושהה still used by a couple of seed rows. A committee decision (approve
+or reject-with-override, see reject_committee_process()) always lands on
+"בתוקף": the ועדה is the final word, so even an overridden rating is in
+effect immediately and does not return to the analyst. Only a manager
+rejection sends a process back to the analyst, via "הוחזר".
 
 Ranking Processes columns are the fields the processes page displays: id,
 subject_issuer_id, code, framework_issuer_id, status, tone, final_score,
@@ -53,14 +54,17 @@ tone, approval_date = today) so the report page's valid_from/valid_until
 tracking start immediately, since both rows represent the same תהליך.
 At either stage the reviewer can instead reject with a required comment
 (saved to rejection_comment) — reject_manager_process() sends it back to
-"הוחזר" (leaving the manager queue) and reject_committee_process() to
-"נדחה בועדה" (leaving the committee queue, recording its own
-final_rating instead of the model's computed_rating). Both email the
+"הוחזר" (leaving the manager queue; not terminal, since a resubmit from
+the scoring modal returns it to בתהליך for another manager review).
+reject_committee_process() is different: the ועדה is the last stage, so
+a rejection there still activates the process straight to "בתוקף" (same
+terminal state, tone, and approval_date stamping as activate_process()),
+just recording the ועדה's own final_rating instead of the model's
+computed_rating — it does not return the process to the analyst. Both email the
 process's owner (ranking_processes.owner, a users.id set at creation)
 directly via _email_process_owner(), reusing the RATING_RETURNED
 notification type's channels but targeting that specific person instead
-of the type's shared configured address. Neither status is terminal —
-הגשה לאישور from the scoring modal resubmits either back to בתהליך.
+of the type's shared configured address.
 
 Issuers columns are the fields the issuers page displays: id (issuer
 code), name, type, sector, country, active. active is a stored column
@@ -245,32 +249,32 @@ SEED_PROCESS_ROWS = [
 ]
 
 SEED_ISSUER_ROWS = [
-    {"id": "10000364", "name": "Meridian Capital Partners", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000399", "name": "Northbridge Holdings Ltd", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000479", "name": "Silverlake Ventures", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000365", "name": "Cedarcrest Investments Limited", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000484", "name": "Harborview Group Holdings", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000366", "name": "Falcon Ridge Partners Limited", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000367", "name": "Ashfield Industries", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000368", "name": "Brightstone Capital Group", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000530", "name": "Wavecrest Designated Activity Company", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000497", "name": "Ironwood Partners", "type": None, "sector": None, "country": None, "active": False},
-    {"id": "10000380", "name": "חשבון מנוהל - Clearwater Capital", "type": None, "sector": None, "country": None, "active": True},
-    {"id": "10000381", "name": "Oakstone Capital Group", "type": None, "sector": None, "country": None, "active": True},
-    {"id": "10000382", "name": "Ridgeline Partners", "type": None, "sector": None, "country": None, "active": True},
+    {"id": "10000364", "name": "Meridian Capital Partners", "type": "Private Company", "sector": "Real Estate", "country": "United States", "active": False, "is_fictitious": True},
+    {"id": "10000399", "name": "Northbridge Holdings Ltd", "type": "Holding Company", "sector": "Financial Services", "country": "United Kingdom", "active": False, "is_fictitious": True},
+    {"id": "10000479", "name": "נגב טכנולוגיות בע\"מ", "type": "Investment Fund", "sector": "Technology", "country": "Israel", "active": False, "is_fictitious": True},
+    {"id": "10000365", "name": "Cedarcrest Investments Limited", "type": "Investment Fund", "sector": "Financial Services", "country": "United Kingdom", "active": False, "is_fictitious": True},
+    {"id": "10000484", "name": "Harborview Group Holdings", "type": "Holding Company", "sector": "Energy", "country": "Luxembourg", "active": False, "is_fictitious": True},
+    {"id": "10000366", "name": "Falcon Ridge Partners Limited", "type": "Investment Fund", "sector": "Real Estate", "country": "United Kingdom", "active": False, "is_fictitious": True},
+    {"id": "10000367", "name": "Ashfield Industries", "type": "Private Company", "sector": "Industrial", "country": "Germany", "active": False, "is_fictitious": True},
+    {"id": "10000368", "name": "תמר נדל\"ן בע\"מ", "type": "Private Company", "sector": "Real Estate", "country": "Israel", "active": False, "is_fictitious": True},
+    {"id": "10000530", "name": "Wavecrest Designated Activity Company", "type": "Holding Company", "sector": "Real Estate", "country": "Ireland", "active": False, "is_fictitious": True},
+    {"id": "10000497", "name": "כרמל אנרגיה בע\"מ", "type": "Private Company", "sector": "Energy", "country": "Israel", "active": False, "is_fictitious": True},
+    {"id": "10000380", "name": "חשבון מנוהל - Clearwater Capital", "type": "Managed Account", "sector": "Real Estate", "country": "United States", "active": True, "is_fictitious": True},
+    {"id": "10000381", "name": "Oakstone Capital Group", "type": "Private Company", "sector": "Real Estate", "country": "United States", "active": True, "is_fictitious": True},
+    {"id": "10000382", "name": "Ridgeline Partners", "type": "Investment Fund", "sector": "Real Estate", "country": "Canada", "active": True, "is_fictitious": True},
 ]
 
 SEED_ASSET_ROWS = [
-    {"id": "737", "name": "Real Estate Development Loan A, LLC 4210", "type": "FRAMEWORK", "issuer_id": "10000380", "cycle_stage": None, "active": True},
-    {"id": "445", "name": "Parkview Owners LLC - Building 214", "type": "FRAMEWORK", "issuer_id": "10000381", "cycle_stage": None, "active": True},
-    {"id": "166", "name": "Riverside Owner LP 42", "type": "FRAMEWORK", "issuer_id": "10000364", "cycle_stage": None, "active": True},
-    {"id": "455", "name": "Cobalt Archimedes Investment", "type": "FRAMEWORK", "issuer_id": "10000399", "cycle_stage": None, "active": True},
-    {"id": "729", "name": "Stonebridge - Horizon Point", "type": "FRAMEWORK", "issuer_id": "10000382", "cycle_stage": None, "active": True},
-    {"id": "598", "name": "Cobalt - Diamond Cove (EPC 3)", "type": "FRAMEWORK", "issuer_id": "10000484", "cycle_stage": None, "active": True},
-    {"id": "486", "name": "Stonebridge - project Atlas 14.03.23", "type": "FRAMEWORK", "issuer_id": "10000367", "cycle_stage": None, "active": True},
-    {"id": "615", "name": "Cobalt - Project Momentum (EPC 3)", "type": "FRAMEWORK", "issuer_id": "10000497", "cycle_stage": None, "active": False},
-    {"id": "407", "name": "Stonebridge - Project Aurora", "type": "FRAMEWORK", "issuer_id": "10000368", "cycle_stage": None, "active": True},
-    {"id": "762", "name": "Stonebridge - Larkspur Gateway Designated Activity Company", "type": "FRAMEWORK", "issuer_id": "10000530", "cycle_stage": None, "active": True},
+    {"id": "737", "name": "Real Estate Development Loan A, LLC 4210", "type": "FRAMEWORK", "issuer_id": "10000380", "cycle_stage": "הפעלה", "active": True, "is_fictitious": True},
+    {"id": "445", "name": "Parkview Owners LLC - Building 214", "type": "FRAMEWORK", "issuer_id": "10000381", "cycle_stage": "הפעלה", "active": True, "is_fictitious": True},
+    {"id": "166", "name": "Riverside Owner LP 42", "type": "FRAMEWORK", "issuer_id": "10000364", "cycle_stage": "הפעלה", "active": True, "is_fictitious": True},
+    {"id": "455", "name": "Cobalt Archimedes Investment", "type": "FRAMEWORK", "issuer_id": "10000399", "cycle_stage": "בסיס / היתכנות", "active": True, "is_fictitious": True},
+    {"id": "729", "name": "Stonebridge - Horizon Point", "type": "FRAMEWORK", "issuer_id": "10000382", "cycle_stage": "הקמה", "active": True, "is_fictitious": True},
+    {"id": "598", "name": "Cobalt - Diamond Cove (EPC 3)", "type": "FRAMEWORK", "issuer_id": "10000484", "cycle_stage": "הקמה", "active": True, "is_fictitious": True},
+    {"id": "486", "name": "Stonebridge - project Atlas 14.03.23", "type": "FRAMEWORK", "issuer_id": "10000367", "cycle_stage": "בסיס / היתכנות", "active": True, "is_fictitious": True},
+    {"id": "615", "name": "כרמל - פרויקט אנרגיה סולארית", "type": "FRAMEWORK", "issuer_id": "10000497", "cycle_stage": "הקמה", "active": False, "is_fictitious": True},
+    {"id": "407", "name": "תמר - מגדל משרדים תל אביב", "type": "FRAMEWORK", "issuer_id": "10000368", "cycle_stage": "הפעלה", "active": True, "is_fictitious": True},
+    {"id": "762", "name": "Stonebridge - Larkspur Gateway Designated Activity Company", "type": "FRAMEWORK", "issuer_id": "10000530", "cycle_stage": "הפעלה", "active": True, "is_fictitious": True},
 ]
 
 SEED_MODEL_ROWS = [
@@ -948,8 +952,8 @@ def init_db():
     if issuer_count == 0:
         conn.executemany(
             """
-            INSERT INTO issuers (id, name, type, sector, country, active)
-            VALUES (:id, :name, :type, :sector, :country, :active)
+            INSERT INTO issuers (id, name, type, sector, country, active, is_fictitious)
+            VALUES (:id, :name, :type, :sector, :country, :active, :is_fictitious)
             """,
             SEED_ISSUER_ROWS,
         )
@@ -960,8 +964,8 @@ def init_db():
             if existing is None:
                 conn.execute(
                     """
-                    INSERT INTO issuers (id, name, type, sector, country, active)
-                    VALUES (:id, :name, :type, :sector, :country, :active)
+                    INSERT INTO issuers (id, name, type, sector, country, active, is_fictitious)
+                    VALUES (:id, :name, :type, :sector, :country, :active, :is_fictitious)
                     """,
                     seed,
                 )
@@ -1011,8 +1015,8 @@ def init_db():
     if asset_count == 0:
         conn.executemany(
             """
-            INSERT INTO assets (id, name, type, issuer_id, cycle_stage, active)
-            VALUES (:id, :name, :type, :issuer_id, :cycle_stage, :active)
+            INSERT INTO assets (id, name, type, issuer_id, cycle_stage, active, is_fictitious)
+            VALUES (:id, :name, :type, :issuer_id, :cycle_stage, :active, :is_fictitious)
             """,
             SEED_ASSET_ROWS,
         )
@@ -1908,26 +1912,32 @@ def reject_committee_process(process_id: str, final_rating: str, comment: str):
     """The ועדה can reject the model's computed rating and record its own
     final_rating instead — computed_rating stays untouched so both are
     visible side by side (the processes/approvals pages already show
-    ציון/דירוג מחושב and ציון/דירוג סופי as separate columns). The process
-    leaves the committee queue: status moves to "נדחה בועדה", and the
-    comment explaining the change is saved and emailed to the owner. The
-    matching rankings row (same id) is synced to the same status/tone so
-    the report page and the processes page agree."""
+    ציון/דירוג מחושב and ציון/דירוג סופי as separate columns). Unlike a
+    manager rejection, this does not go back to the analyst: the ועדה is
+    the last stage, so the process is activated straight to "בתוקף" —
+    same terminal state, tone, and approval_date stamping as
+    activate_process() — with the comment explaining the override saved
+    and emailed to the owner. The matching rankings row (same id) is
+    synced to the same status/tone/approval_date so the report page and
+    the processes page agree, and the 1-year validity window
+    (get_all_rankings()) starts immediately just like a straight
+    approval."""
+    today = date.today().isoformat()
     conn = get_connection()
     conn.execute(
         "UPDATE ranking_processes SET final_rating = ?, status = ?, tone = ?, rejection_comment = ? WHERE id = ?",
-        (final_rating, "נדחה בועדה", "red", comment, process_id),
+        (final_rating, "בתוקף", "green", comment, process_id),
     )
     conn.execute(
-        "UPDATE rankings SET status = ?, tone = ? WHERE id = ?",
-        ("נדחה בועדה", "red", process_id),
+        "UPDATE rankings SET status = ?, tone = ?, approval_date = ? WHERE id = ?",
+        ("בתוקף", "green", today, process_id),
     )
     conn.commit()
     conn.close()
     process = get_process(process_id)
     _email_process_owner(
         process_id,
-        f"התהליך {process_id} ({process['code']}) נדחה על ידי הוועדה. דירוג סופי חדש: {final_rating}. הערה: {comment}",
+        f"התהליך {process_id} ({process['code']}) הופעל בסטטוס בתוקף, אך הוועדה שינתה את הדירוג הסופי ל-{final_rating}. הערה: {comment}",
     )
     return process
 

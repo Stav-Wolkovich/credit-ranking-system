@@ -66,10 +66,6 @@ export default function ModelsPage() {
   }
 
   function handleEdit(model) {
-    if (model.status === "פעיל") {
-      setError(`לא ניתן לערוך את המודל "${model.name}" בעודו בסטטוס "פעיל". יש להחזירו לטיוטה תחילה.`);
-      return;
-    }
     setModal({ mode: "edit", model });
   }
 
@@ -180,10 +176,10 @@ export default function ModelsPage() {
                   <button
                     type="button"
                     onClick={() => handleEdit(r)}
-                    aria-label="עריכה"
+                    aria-label={r.status === "פעיל" ? "צפייה" : "עריכה"}
                     style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-mid)" }}
                   >
-                    ✎
+                    {r.status === "פעיל" ? "👁" : "✎"}
                   </button>
                   <button
                     type="button"

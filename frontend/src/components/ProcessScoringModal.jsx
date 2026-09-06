@@ -36,7 +36,7 @@ function matrixCellScore(matrix, x, y) {
   return matrix.cell_values[yIndex]?.[xIndex] ?? null;
 }
 
-function ParameterField({ parameter, onAnswer, saving }) {
+function ParameterField({ parameter, onAnswer, saving, readOnly }) {
   const isSubjective = parameter.type === "סובייקטיבי";
   const isQuant = parameter.type === "כמותי";
   const isChoiceList = isSubjective || isQuant;
@@ -48,6 +48,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
   const [matrixY, setMatrixY] = useState(parameter.current_answer?.matrix_y ?? "");
 
   function handleMatrixChange(nextX, nextY) {
+    if (readOnly) return;
     setMatrixX(nextX);
     setMatrixY(nextY);
     if (nextX && nextY) onAnswer({ matrix_x: nextX, matrix_y: nextY });
@@ -73,14 +74,14 @@ function ParameterField({ parameter, onAnswer, saving }) {
                 padding: "6px 8px",
                 borderRadius: 6,
                 background: parameter.current_answer?.answer_id === a.id ? "#e8f0fe" : "transparent",
-                cursor: saving ? "default" : "pointer",
+                cursor: saving || readOnly ? "default" : "pointer",
               }}
             >
               <input
                 type="radio"
                 name={`param-${parameter.id}`}
                 checked={parameter.current_answer?.answer_id === a.id}
-                disabled={saving}
+                disabled={saving || readOnly}
                 onChange={() => onAnswer({ answer_id: a.id })}
               />
               <span style={{ flex: 1 }}>{a.text}</span>
@@ -153,7 +154,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
                         return (
                           <td
                             key={x}
-                            onClick={() => !saving && handleMatrixChange(x, y)}
+                            onClick={() => !saving && !readOnly && handleMatrixChange(x, y)}
                             style={{
                               border: selected ? "2px solid var(--accent)" : "1px solid var(--border)",
                               padding: "6px 10px",
@@ -161,7 +162,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
                               background: selected ? "#e8f0fe" : "#fff",
                               color: selected ? "var(--accent)" : "var(--text-dark)",
                               fontWeight: selected ? 700 : 400,
-                              cursor: saving ? "default" : "pointer",
+                              cursor: saving || readOnly ? "default" : "pointer",
                               whiteSpace: "nowrap",
                             }}
                           >
@@ -187,7 +188,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
             type="number"
             step="0.1"
             value={numericDraft}
-            disabled={saving}
+            disabled={saving || readOnly}
             onChange={(e) => setNumericDraft(e.target.value)}
             onBlur={() => {
               const v = numericDraft === "" ? null : Number(numericDraft);
@@ -200,6 +201,8 @@ function ParameterField({ parameter, onAnswer, saving }) {
               borderRadius: 6,
               padding: "7px 10px",
               fontSize: 13,
+              background: readOnly ? "#f2f3f5" : "#fff",
+              color: readOnly ? "var(--text-light)" : "inherit",
             }}
           />
           <span style={{ fontSize: 11.5, color: "var(--text-light)" }}>פרמטר אובייקטיבי — הזנת ציון ישירה</span>
@@ -254,6 +257,7 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
   }, [structure]);
 
   async function handleAnswer(parameterId, payload) {
+    if (PROCESS_TERMINAL_STATUSES.has(process.status)) return;
     setSaving(true);
     setError(null);
     // Optimistic local update so the radio/number reflects the pick immediately.
@@ -294,6 +298,12 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
   }
 
   const isTerminal = PROCESS_TERMINAL_STATUSES.has(process.status);
+  // A committee rejection activates the process straight to "בתוקף" with an
+  // overridden final_rating (see reject_committee_process()) instead of
+  // returning it to the analyst — rejection_comment is the only remaining
+  // signal that distinguishes that case from a plain committee approval or
+  // a manager return ("הוחזר", which doesn't set final_rating).
+  const committeeOverridden = Boolean(process.rejection_comment) && process.status !== "הוחזר";
   const busy = saving || statusAction !== null;
 
   return (
@@ -412,8 +422,8 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
               {process.final_rating && (
                 <div
                   style={{
-                    border: `1px solid ${process.status === "נדחה בועדה" ? "#e0a0a0" : "var(--border)"}`,
-                    background: process.status === "נדחה בועדה" ? "#fbe9e9" : "#f7f8fa",
+                    border: `1px solid ${committeeOverridden ? "#e0a0a0" : "var(--border)"}`,
+                    background: committeeOverridden ? "#fbe9e9" : "#f7f8fa",
                     borderRadius: 8,
                     padding: "10px 14px",
                     textAlign: "center",
@@ -425,7 +435,7 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                       style={{
                         fontSize: 18,
                         fontWeight: 700,
-                        color: process.status === "נדחה בועדה" ? "#b52d2d" : "var(--text-dark)",
+                        color: committeeOverridden ? "#b52d2d" : "var(--text-dark)",
                       }}
                     >
                       {process.final_rating}
@@ -434,9 +444,9 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                       <span style={{ fontSize: 13, color: "var(--text-mid)" }}>{process.final_score}</span>
                     )}
                   </div>
-                  {process.status === "נדחה בועדה" && (
+                  {committeeOverridden && (
                     <div style={{ fontSize: 11, color: "#b52d2d", marginTop: 4, fontWeight: 600 }}>
-                      ✕ נדחה על ידי הוועדה — שונה מהדירוג המחושב
+                      ✕ שונה על ידי הוועדה — שונה מהדירוג המחושב
                     </div>
                   )}
                 </div>
@@ -507,6 +517,7 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                       key={p.id}
                       parameter={p}
                       saving={saving}
+                      readOnly={isTerminal}
                       onAnswer={(payload) => handleAnswer(p.id, payload)}
                     />
                   ))}

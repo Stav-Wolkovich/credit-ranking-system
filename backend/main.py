@@ -476,8 +476,11 @@ def apply_process_status_action(process_id: str, payload: ProcessStatusAction):
 
 @app.put("/api/processes/{process_id}/answers")
 def save_process_answer(process_id: str, payload: ProcessAnswerInput):
-    if not database.get_process(process_id):
+    process = database.get_process(process_id)
+    if not process:
         raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] in PROCESS_TERMINAL_STATUSES:
+        raise HTTPException(status_code=409, detail="לא ניתן לשנות תשובות בתהליך שהושלם או בוטל")
     has_matrix_pair = payload.matrix_x is not None and payload.matrix_y is not None
     if payload.answer_id is None and payload.numeric_value is None and not has_matrix_pair:
         raise HTTPException(status_code=422, detail="יש לספק תשובה, ערך מספרי, או ערכי ציר X/Y")
@@ -675,6 +678,13 @@ def _clean_model_input(payload: ModelInput):
         for q in payload.questionnaires
         if q.id.strip()
     ]
+    for q in questionnaires:
+        questionnaire = database.get_questionnaire(q["id"])
+        if not questionnaire or questionnaire["status"] != "פעיל":
+            raise HTTPException(
+                status_code=422,
+                detail=f'ניתן לשייך למודל רק שאלונים בסטטוס "פעיל" (שאלון "{q["id"]}" אינו פעיל)',
+            )
     return {
         "id": model_id,
         "name": name,

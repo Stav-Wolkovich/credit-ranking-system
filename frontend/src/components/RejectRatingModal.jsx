@@ -75,8 +75,9 @@ export default function RejectRatingModal({ process, stage, onCancel, onRejected
         <div style={{ fontSize: 13, color: "var(--text-mid)", marginBottom: 14 }}>
           {isCommittee ? (
             <>
-              {process.id} · {process.code} — הדירוג המחושב יידחה והתהליך ייצא מתור האישורים בסטטוס "נדחה בועדה". יש
-              לבחור דירוג סופי חלופי ולהסביר את הסיבה.
+              {process.id} · {process.code} — הדירוג המחושב יידחה, אך התהליך יופעל ישירות בסטטוס "בתוקף" עם הדירוג
+              הסופי שתבחרו (הוועדה היא שלב הסקירה האחרון, כך שהתהליך לא יוחזר לאחראי). יש לבחור דירוג סופי חלופי
+              ולהסביר את הסיבה.
             </>
           ) : (
             <>
