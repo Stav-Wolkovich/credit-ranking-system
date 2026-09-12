@@ -12,6 +12,9 @@ const COLUMNS = [
   { key: "computed_rating", label: "דירוג מחושב", accessor: (r) => r.computed_rating },
   { key: "final_score", label: "ציון סופי", accessor: (r) => r.final_score ?? null },
   { key: "final_rating", label: "דירוג סופי", accessor: (r) => r.final_rating },
+  { key: "external_rating", label: "דירוג חיצוני", accessor: (r) => r.external_rating },
+  { key: "external_rating_date", label: "תאריך דירוג חיצוני", accessor: (r) => r.external_rating_date },
+  { key: "external_rating_agency", label: "סוכנות חיצונית", accessor: (r) => r.external_rating_agency },
   { key: "completion", label: "השלמה", accessor: (r) => `${r.completion}%` },
   { key: "valid_from", label: "תוקף מ-", accessor: (r) => r.valid_from },
   { key: "valid_until", label: "תוקף עד", accessor: (r) => r.valid_until },
@@ -161,12 +164,15 @@ export default function ReportPage() {
                 <td style={{ padding: "12px 16px" }}>
                   <Badge label={r.status} tone={r.tone} />
                 </td>
-                <td style={{ padding: "12px 16px" }}>{r.model}</td>
+                <td style={{ padding: "12px 16px" }}>{r.model ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.team}</td>
                 <td style={{ padding: "12px 16px" }}>{r.computed_score ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.computed_rating ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.final_score ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.final_rating ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.external_rating ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.external_rating_date ?? "-"}</td>
+                <td style={{ padding: "12px 16px" }}>{r.external_rating_agency ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.completion}%</td>
                 <td style={{ padding: "12px 16px" }}>{r.valid_from ?? "-"}</td>
                 <td style={{ padding: "12px 16px" }}>{r.valid_until ?? "-"}</td>

@@ -34,21 +34,6 @@ export default function Sidebar({ items, activePage, onSelect, open }) {
               }}
             >
               {item.label}
-              {item.count != null && (
-                <span
-                  style={{
-                    marginRight: "auto",
-                    background: "var(--accent)",
-                    color: "#fff",
-                    fontSize: 11,
-                    borderRadius: 9,
-                    padding: "1px 7px",
-                    fontWeight: 600,
-                  }}
-                >
-                  {item.count}
-                </span>
-              )}
             </div>
           );
         })}

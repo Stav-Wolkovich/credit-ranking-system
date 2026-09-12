@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
-import { Badge, PageHeader, ErrorBanner } from "../components/ui.jsx";
+import { Badge, PageHeader, ErrorBanner, ConfirmDialog } from "../components/ui.jsx";
 import MatrixModal from "../components/MatrixModal.jsx";
 import DuplicateMatrixModal from "../components/DuplicateMatrixModal.jsx";
 import { FilterableTableHead } from "../components/FilterableTh.jsx";
@@ -22,6 +22,7 @@ export default function MatricesPage() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [duplicateTarget, setDuplicateTarget] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const loadMatrices = useCallback(() => {
     setLoading(true);
@@ -39,6 +40,15 @@ export default function MatricesPage() {
   const rows = data?.rows ?? [];
   const filterState = useColumnFilters(rows, COLUMNS);
   const { search, setSearch, filteredRows } = filterState;
+
+  function confirmDelete() {
+    const matrix = deleteTarget;
+    setDeleteTarget(null);
+    api
+      .deleteMatrix(matrix.id)
+      .then(() => loadMatrices())
+      .catch((err) => setError(err.message));
+  }
 
   return (
     <div>
@@ -125,6 +135,14 @@ export default function MatricesPage() {
                   >
                     ✎
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(r)}
+                    aria-label="מחיקה"
+                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
+                  >
+                    🗑
+                  </button>
                 </td>
               </tr>
             ))}
@@ -152,6 +170,15 @@ export default function MatricesPage() {
             setDuplicateTarget(null);
             loadMatrices();
           }}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="מחיקה"
+          message={`למחוק את המטריצה "${deleteTarget.name}"?`}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={confirmDelete}
         />
       )}
     </div>

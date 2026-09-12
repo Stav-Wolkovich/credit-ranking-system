@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 
 const CALCULATION_METHOD_OPTIONS = ["ממוצע משוקלל", "סכום", "מטריצה", "מקסימום"];
-const PARAMETER_TYPE_OPTIONS = ["סובייקטיבי", "מזלג", "מטריצה", "כמותי", "מחושב", "מיפוי", "טקסט", "בוליאני"];
+const PARAMETER_TYPE_OPTIONS = ["סובייקטיבי", "מזלג", "מטריצה", "כמותי", "מחושב", "מיפוי"];
 
 function Field({ label, required, invalid, disabled, value, onChange }) {
   return (
@@ -31,10 +31,11 @@ function Field({ label, required, invalid, disabled, value, onChange }) {
   );
 }
 
-function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemove }) {
+function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemove, readOnly }) {
   const [expanded, setExpanded] = useState(false);
 
   function set(field, value) {
+    if (readOnly) return;
     onChange({ ...parameter, [field]: value });
   }
 
@@ -57,6 +58,7 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
   }
 
   function removeAnswer(i) {
+    if (readOnly) return;
     set(
       "answers",
       parameter.answers.filter((_, idx) => idx !== i)
@@ -64,6 +66,7 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
   }
 
   function addAnswer() {
+    if (readOnly) return;
     set("answers", [...parameter.answers, { text: "", score: 0, min_value: 0, max_value: 0 }]);
   }
 
@@ -89,14 +92,16 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button
-            type="button"
-            onClick={onRemove}
-            aria-label="הסר פרמטר"
-            style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
-          >
-            🗑
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={onRemove}
+              aria-label="הסר פרמטר"
+              style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
+            >
+              🗑
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
@@ -115,13 +120,15 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
             <select
               value={parameter.type}
               onChange={(e) => set("type", e.target.value)}
+              disabled={readOnly}
               style={{
                 width: "100%",
                 border: "1px solid var(--border)",
                 borderRadius: 6,
                 padding: "8px 10px",
                 fontSize: 13,
-                background: "#fff",
+                background: readOnly ? "#f2f3f5" : "#fff",
+                color: readOnly ? "var(--text-light)" : "inherit",
               }}
             >
               {PARAMETER_TYPE_OPTIONS.map((t) => (
@@ -141,13 +148,15 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
               <select
                 value={parameter.matrix_id ?? ""}
                 onChange={(e) => set("matrix_id", e.target.value || null)}
+                disabled={readOnly}
                 style={{
                   width: "100%",
                   border: `1px solid ${matrixInvalid ? "#e0a0a0" : "var(--border)"}`,
                   borderRadius: 6,
                   padding: "8px 10px",
                   fontSize: 13,
-                  background: "#fff",
+                  background: readOnly ? "#f2f3f5" : "#fff",
+                  color: readOnly ? "var(--text-light)" : "inherit",
                 }}
               >
                 <option value="">בחר מטריצה</option>
@@ -166,12 +175,15 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
               type="number"
               value={parameter.weight}
               onChange={(e) => set("weight", Number(e.target.value))}
+              disabled={readOnly}
               style={{
                 width: "100%",
                 border: "1px solid var(--border)",
                 borderRadius: 6,
                 padding: "8px 10px",
                 fontSize: 13,
+                background: readOnly ? "#f2f3f5" : "#fff",
+                color: readOnly ? "var(--text-light)" : "inherit",
               }}
             />
           </div>
@@ -182,52 +194,76 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
               type="text"
               value={parameter.name}
               onChange={(e) => set("name", e.target.value)}
+              disabled={readOnly}
               style={{
                 width: "100%",
                 border: "1px solid var(--border)",
                 borderRadius: 6,
                 padding: "8px 10px",
                 fontSize: 13,
+                background: readOnly ? "#f2f3f5" : "#fff",
+                color: readOnly ? "var(--text-light)" : "inherit",
               }}
             />
           </div>
 
           {(parameter.type === "סובייקטיבי" || parameter.type === "כמותי") && (
             <div>
-              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <div style={{ width: 20, flexShrink: 0 }} />
                 <div style={{ flex: 1, fontSize: 12, color: "var(--text-mid)" }}>תיאור</div>
-                <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>ציון</div>
+                <div style={{ width: 52, flexShrink: 0, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                  ציון
+                </div>
                 {parameter.type === "כמותי" && (
                   <>
-                    <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                    <div
+                      style={{ width: 52, flexShrink: 0, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}
+                    >
                       מקסימום
                     </div>
-                    <div style={{ width: 60, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}>
+                    <div
+                      style={{ width: 52, flexShrink: 0, fontSize: 12, color: "var(--text-mid)", textAlign: "center" }}
+                    >
                       מינימום
                     </div>
                   </>
                 )}
               </div>
               {parameter.answers.map((answer, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <button
-                    type="button"
-                    onClick={() => removeAnswer(i)}
-                    aria-label="הסר תשובה"
-                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
-                  >
-                    ✕
-                  </button>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => removeAnswer(i)}
+                      aria-label="הסר תשובה"
+                      style={{
+                        width: 20,
+                        flexShrink: 0,
+                        background: "transparent",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        color: "#b52d2d",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
                   <input
                     type="text"
                     value={answer.text}
                     onChange={(e) => updateAnswerText(i, e.target.value)}
+                    disabled={readOnly}
                     style={{
                       flex: 1,
+                      minWidth: 0,
                       border: "1px solid var(--border)",
                       borderRadius: 6,
-                      padding: "7px 10px",
+                      padding: "7px 8px",
                       fontSize: 13,
+                      background: readOnly ? "#f2f3f5" : "#fff",
+                      color: readOnly ? "var(--text-light)" : "inherit",
                     }}
                   />
                   <input
@@ -235,14 +271,18 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                     step="0.1"
                     value={answer.score}
                     onChange={(e) => updateAnswerScore(i, e.target.value)}
+                    disabled={readOnly}
                     title="ציון — נמוך יותר = טוב יותר"
                     style={{
-                      width: 60,
+                      width: 52,
+                      flexShrink: 0,
                       border: "1px solid var(--border)",
                       borderRadius: 6,
-                      padding: "7px 8px",
+                      padding: "7px 4px",
                       fontSize: 13,
                       textAlign: "center",
+                      background: readOnly ? "#f2f3f5" : "#fff",
+                      color: readOnly ? "var(--text-light)" : "inherit",
                     }}
                   />
                   {parameter.type === "כמותי" && (
@@ -252,13 +292,17 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                         step="0.1"
                         value={answer.max_value ?? ""}
                         onChange={(e) => updateAnswerRange(i, "max_value", e.target.value)}
+                        disabled={readOnly}
                         style={{
-                          width: 60,
+                          width: 52,
+                          flexShrink: 0,
                           border: "1px solid var(--border)",
                           borderRadius: 6,
-                          padding: "7px 8px",
+                          padding: "7px 4px",
                           fontSize: 13,
                           textAlign: "center",
+                          background: readOnly ? "#f2f3f5" : "#fff",
+                          color: readOnly ? "var(--text-light)" : "inherit",
                         }}
                       />
                       <input
@@ -266,37 +310,40 @@ function ParameterEditor({ parameter, matrices, matrixInvalid, onChange, onRemov
                         step="0.1"
                         value={answer.min_value ?? ""}
                         onChange={(e) => updateAnswerRange(i, "min_value", e.target.value)}
+                        disabled={readOnly}
                         style={{
-                          width: 60,
+                          width: 52,
+                          flexShrink: 0,
                           border: "1px solid var(--border)",
                           borderRadius: 6,
-                          padding: "7px 8px",
+                          padding: "7px 4px",
                           fontSize: 13,
                           textAlign: "center",
+                          background: readOnly ? "#f2f3f5" : "#fff",
+                          color: readOnly ? "var(--text-light)" : "inherit",
                         }}
                       />
                     </>
                   )}
-                  <span style={{ fontSize: 12, color: "var(--text-light)", minWidth: 16, textAlign: "center" }}>
-                    {i + 1}
-                  </span>
                 </div>
               ))}
-              <button
-                type="button"
-                onClick={addAnswer}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "var(--accent)",
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  padding: "4px 0",
-                }}
-              >
-                {parameter.type === "כמותי" ? "+ הוסף טווח" : "+ הוסף תשובה"}
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={addAnswer}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--accent)",
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    padding: "4px 0",
+                  }}
+                >
+                  {parameter.type === "כמותי" ? "+ הוסף טווח" : "+ הוסף תשובה"}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -345,21 +392,27 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
     }
   }, [mode, initial]);
 
-  const title = mode === "create" ? "צור שאלון" : "עריכת שאלון";
+  const readOnly = mode === "edit" && initial?.status === "פעיל";
+  const title = mode === "create" ? "צור שאלון" : readOnly ? "צפייה בשאלון" : "עריכת שאלון";
 
   const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
 
   function addParameter() {
+    if (readOnly) return;
     setParameters((prev) => [...prev, { name: "", type: "סובייקטיבי", weight: 0, answers: [], matrix_id: null }]);
   }
 
   function updateParameter(index, next) {
+    if (readOnly) return;
     setParameters((prev) => prev.map((p, i) => (i === index ? next : p)));
   }
 
   function removeParameter(index) {
+    if (readOnly) return;
     setParameters((prev) => prev.filter((_, i) => i !== index));
   }
+
+  const totalWeight = parameters.reduce((sum, p) => sum + (Number(p.weight) || 0), 0);
 
   function validate() {
     const missing = new Set();
@@ -370,6 +423,10 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
       parameters.map((p, i) => (p.type === "מטריצה" && !p.matrix_id ? i : null)).filter((i) => i !== null)
     );
     setMatrixErrors(missingMatrix);
+    if (totalWeight > 100) {
+      setError(`סך אחוזי המשקל של הפרמטרים חורג מ-100% (סה"כ: ${totalWeight}%)`);
+      return false;
+    }
     return missing.size === 0 && missingMatrix.size === 0;
   }
 
@@ -426,7 +483,7 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
         style={{
           background: "#fff",
           borderRadius: 10,
-          width: 460,
+          width: parameters.some((p) => p.type === "כמותי") ? 560 : 460,
           maxWidth: "90vw",
           maxHeight: "88vh",
           padding: 22,
@@ -436,7 +493,7 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-dark)", display: "flex", gap: 8, alignItems: "center" }}>
-            {title} <span>{mode === "create" ? "➕" : "✎"}</span>
+            {title} <span>{mode === "create" ? "➕" : readOnly ? "👁" : "✎"}</span>
           </div>
           <button
             type="button"
@@ -476,20 +533,29 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
               value={form.id}
               onChange={set("id")}
             />
-            <Field label="שם שאלון" required invalid={fieldErrors.has("name")} value={form.name} onChange={set("name")} />
+            <Field
+              label="שם שאלון"
+              required
+              invalid={fieldErrors.has("name")}
+              value={form.name}
+              onChange={set("name")}
+              disabled={readOnly}
+            />
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>שיטת חישוב</div>
               <select
                 value={form.calculation_method}
                 onChange={set("calculation_method")}
+                disabled={readOnly}
                 style={{
                   width: "100%",
                   border: "1px solid var(--border)",
                   borderRadius: 6,
                   padding: "9px 12px",
                   fontSize: 13,
-                  background: "#fff",
+                  background: readOnly ? "#f2f3f5" : "#fff",
+                  color: readOnly ? "var(--text-light)" : "inherit",
                 }}
               >
                 {CALCULATION_METHOD_OPTIONS.map((m) => (
@@ -506,6 +572,7 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
                 value={form.description}
                 onChange={set("description")}
                 rows={3}
+                disabled={readOnly}
                 style={{
                   width: "100%",
                   border: "1px solid var(--border)",
@@ -514,11 +581,27 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
                   fontSize: 13,
                   fontFamily: "inherit",
                   resize: "vertical",
+                  background: readOnly ? "#f2f3f5" : "#fff",
+                  color: readOnly ? "var(--text-light)" : "inherit",
                 }}
               />
             </div>
 
-            <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 6 }}>פרמטרים</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontSize: 12.5, color: "var(--text-mid)" }}>פרמטרים</div>
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 700,
+                  padding: "2px 10px",
+                  borderRadius: 12,
+                  background: totalWeight > 100 ? "#fbe9e9" : "#eceef1",
+                  color: totalWeight > 100 ? "#b52d2d" : "var(--text-mid)",
+                }}
+              >
+                סה"כ משקל: {totalWeight}%
+              </span>
+            </div>
             {parameters.map((p, i) => (
               <ParameterEditor
                 key={i}
@@ -527,25 +610,28 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
                 matrixInvalid={matrixErrors.has(i)}
                 onChange={(next) => updateParameter(i, next)}
                 onRemove={() => removeParameter(i)}
+                readOnly={readOnly}
               />
             ))}
-            <button
-              type="button"
-              onClick={addParameter}
-              style={{
-                background: "transparent",
-                border: "1px dashed var(--border)",
-                borderRadius: 6,
-                color: "var(--accent)",
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-                padding: "8px 12px",
-                width: "100%",
-              }}
-            >
-              + הוסף פרמטר
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={addParameter}
+                style={{
+                  background: "transparent",
+                  border: "1px dashed var(--border)",
+                  borderRadius: 6,
+                  color: "var(--accent)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  padding: "8px 12px",
+                  width: "100%",
+                }}
+              >
+                + הוסף פרמטר
+              </button>
+            )}
           </div>
         )}
 
@@ -564,26 +650,28 @@ export default function QuestionnaireModal({ mode, initial, onCancel, onSaved })
               cursor: "pointer",
             }}
           >
-            ביטול
+            {readOnly ? "סגור" : "ביטול"}
           </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving || loading}
-            style={{
-              background: "var(--accent)",
-              color: "#fff",
-              border: "none",
-              borderRadius: 6,
-              padding: "9px 18px",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: saving ? "default" : "pointer",
-              opacity: saving ? 0.7 : 1,
-            }}
-          >
-            {saving ? "שומר…" : "שמירה"}
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || loading}
+              style={{
+                background: "var(--accent)",
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                padding: "9px 18px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: saving ? "default" : "pointer",
+                opacity: saving ? 0.7 : 1,
+              }}
+            >
+              {saving ? "שומר…" : "שמירה"}
+            </button>
+          )}
         </div>
       </div>
     </div>

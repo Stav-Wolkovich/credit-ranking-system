@@ -83,6 +83,7 @@ class IssuerInput(BaseModel):
     type: Optional[str] = None
     sector: Optional[str] = None
     country: Optional[str] = None
+    is_fictitious: bool = False
 
 
 class AssetInput(BaseModel):
@@ -91,6 +92,7 @@ class AssetInput(BaseModel):
     type: Optional[str] = None
     issuer_id: Optional[str] = None
     cycle_stage: Optional[str] = None
+    is_fictitious: bool = False
 
 
 class TeamInput(BaseModel):
@@ -113,9 +115,15 @@ class ModelInput(BaseModel):
     family: str
     domain: str
     owner: str
+    active_version: Optional[str] = None
     description: Optional[str] = None
     questionnaires: List[ModelQuestionnaireInput] = []
     rating_scale_id: Optional[str] = None
+
+
+class ModelDuplicateInput(BaseModel):
+    id: str
+    name: str
 
 
 class RatingScaleLevelInput(BaseModel):
@@ -171,6 +179,7 @@ class RoleInput(BaseModel):
     can_approve: bool = False
     can_committee_approve: bool = False
     can_rerun: bool = False
+    can_manage_notifications: bool = False
 
 
 class UserInput(BaseModel):
@@ -211,6 +220,13 @@ class ReportInput(BaseModel):
 
 class NotificationTypeEmailInput(BaseModel):
     notification_email: Optional[str] = None
+
+
+class NotificationRuleInput(BaseModel):
+    title: str
+    message: str
+    recipient_email: str
+    type_ids: List[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -373,25 +389,41 @@ def get_processes():
 
 
 class ProcessCreateInput(BaseModel):
-    model_id: str
+    model_id: Optional[str] = None
     kind: str
     framework_issuer_id: Optional[str] = None
     framework_asset_id: Optional[str] = None
     data_date: Optional[str] = None
     owner: str
+    external_rating_agency: Optional[str] = None
+    external_rating_date: Optional[str] = None
+    external_rating: Optional[str] = None
 
 
 @app.post("/api/processes", status_code=201)
 def create_process(payload: ProcessCreateInput):
     if payload.kind not in ("מנפיק", "נכס"):
         raise HTTPException(status_code=422, detail="סוג מסגרת לא תקין")
-    model = database.get_model(payload.model_id)
-    if not model:
-        raise HTTPException(status_code=422, detail="מודל דירוג לא נמצא")
-    if model["status"] != "פעיל":
-        raise HTTPException(status_code=422, detail="ניתן לבחור רק מודל בסטטוס פעיל")
-    if model["questionnaires_count"] < 1:
-        raise HTTPException(status_code=422, detail="למודל הנבחר אין שאלונים מקושרים")
+
+    external_rating = (payload.external_rating or "").strip() or None
+    external_rating_date = (payload.external_rating_date or "").strip() or None
+    external_rating_agency = (payload.external_rating_agency or "").strip() or None
+    is_external = external_rating is not None or external_rating_date is not None
+
+    model_id = None
+    if is_external:
+        if not external_rating or not external_rating_date:
+            raise HTTPException(status_code=422, detail="יש להזין תאריך ודירוג עבור דירוג חיצוני")
+    else:
+        model = database.get_model(payload.model_id or "")
+        if not model:
+            raise HTTPException(status_code=422, detail="מודל דירוג לא נמצא")
+        if model["status"] != "פעיל":
+            raise HTTPException(status_code=422, detail="ניתן לבחור רק מודל בסטטוס פעיל")
+        if model["questionnaires_count"] < 1:
+            raise HTTPException(status_code=422, detail="למודל הנבחר אין שאלונים מקושרים")
+        model_id = payload.model_id
+
     if not payload.owner.strip() or not database.get_user(payload.owner):
         raise HTTPException(status_code=422, detail="יש לבחור אחראי תהליך קיים")
     if payload.kind == "מנפיק":
@@ -404,12 +436,15 @@ def create_process(payload: ProcessCreateInput):
             raise HTTPException(status_code=422, detail="יש לבחור נכס קיים")
         framework_asset_id = asset["id"]
     return database.create_ranking_process(
-        model_id=payload.model_id,
+        model_id=model_id,
         kind=payload.kind,
         framework_issuer_id=payload.framework_issuer_id,
         framework_asset_id=framework_asset_id,
         data_date=payload.data_date,
         owner=payload.owner.strip(),
+        external_rating_agency=external_rating_agency,
+        external_rating_date=external_rating_date,
+        external_rating=external_rating,
     )
 
 
@@ -442,6 +477,10 @@ PROCESS_STATUS_ACTIONS = {
     "cancel": ("בוטל", "red"),
 }
 PROCESS_TERMINAL_STATUSES = {"בוטל", "אושר בוועדה", "בתוקף"}
+# submit/self_approve both move a process into תור אישורים (the manager or
+# committee queue, respectively) — only allowed once every parameter has an
+# answer.
+APPROVAL_QUEUE_ACTIONS = {"submit", "self_approve"}
 
 
 @app.post("/api/processes/{process_id}/status-action")
@@ -453,14 +492,22 @@ def apply_process_status_action(process_id: str, payload: ProcessStatusAction):
         raise HTTPException(status_code=422, detail="פעולה לא תקינה")
     if process["status"] in PROCESS_TERMINAL_STATUSES:
         raise HTTPException(status_code=409, detail="לא ניתן לשנות סטטוס לתהליך שהושלם או בוטל")
+    if payload.action in APPROVAL_QUEUE_ACTIONS and (process["completion"] or 0) < 100:
+        raise HTTPException(
+            status_code=409,
+            detail=f"לא ניתן להעביר תהליך לתור אישורים לפני השלמת כל השאלונים (השלמה נוכחית: {process['completion'] or 0}%)",
+        )
     status, tone = PROCESS_STATUS_ACTIONS[payload.action]
     return database.update_process_status(process_id, status, tone)
 
 
 @app.put("/api/processes/{process_id}/answers")
 def save_process_answer(process_id: str, payload: ProcessAnswerInput):
-    if not database.get_process(process_id):
+    process = database.get_process(process_id)
+    if not process:
         raise HTTPException(status_code=404, detail="תהליך לא נמצא")
+    if process["status"] in PROCESS_TERMINAL_STATUSES:
+        raise HTTPException(status_code=409, detail="לא ניתן לשנות תשובות בתהליך שהושלם או בוטל")
     has_matrix_pair = payload.matrix_x is not None and payload.matrix_y is not None
     if payload.answer_id is None and payload.numeric_value is None and not has_matrix_pair:
         raise HTTPException(status_code=422, detail="יש לספק תשובה, ערך מספרי, או ערכי ציר X/Y")
@@ -499,6 +546,7 @@ def _clean_issuer_input(payload: IssuerInput):
         "type": (payload.type or "").strip() or None,
         "sector": (payload.sector or "").strip() or None,
         "country": (payload.country or "").strip() or None,
+        "is_fictitious": payload.is_fictitious,
     }
 
 
@@ -547,12 +595,18 @@ def _clean_asset_input(payload: AssetInput):
     name = payload.name.strip()
     if not asset_id or not name:
         raise HTTPException(status_code=422, detail="קוד נכס ושם נכס הם שדות חובה")
+    issuer_id = (payload.issuer_id or "").strip() or None
+    if payload.is_fictitious and issuer_id:
+        issuer = database.get_issuer(issuer_id)
+        if not issuer or not issuer["is_fictitious"]:
+            raise HTTPException(status_code=422, detail="לנכס פיקטיבי ניתן לשייך רק מנפיק פיקטיבי")
     return {
         "id": asset_id,
         "name": name,
         "type": (payload.type or "").strip() or None,
-        "issuer_id": (payload.issuer_id or "").strip() or None,
+        "issuer_id": issuer_id,
         "cycle_stage": (payload.cycle_stage or "").strip() or None,
+        "is_fictitious": payload.is_fictitious,
     }
 
 
@@ -639,6 +693,7 @@ def _clean_model_input(payload: ModelInput):
     domain = payload.domain.strip()
     owner = payload.owner.strip()
     rating_scale_id = (payload.rating_scale_id or "").strip()
+    active_version = (payload.active_version or "").strip() or "v1"
     if not model_id or not name or not family or not domain or not owner:
         raise HTTPException(status_code=422, detail="כל השדות הם שדות חובה")
     if not rating_scale_id:
@@ -650,12 +705,20 @@ def _clean_model_input(payload: ModelInput):
         for q in payload.questionnaires
         if q.id.strip()
     ]
+    for q in questionnaires:
+        questionnaire = database.get_questionnaire(q["id"])
+        if not questionnaire or questionnaire["status"] != "פעיל":
+            raise HTTPException(
+                status_code=422,
+                detail=f'ניתן לשייך למודל רק שאלונים בסטטוס "פעיל" (שאלון "{q["id"]}" אינו פעיל)',
+            )
     return {
         "id": model_id,
         "name": name,
         "family": family,
         "domain": domain,
         "owner": owner,
+        "active_version": active_version,
         "description": (payload.description or "").strip() or None,
         "questionnaires": questionnaires,
         "rating_scale_id": rating_scale_id,
@@ -674,8 +737,14 @@ def create_model(payload: ModelInput):
 
 @app.put("/api/models/{model_id}")
 def update_model(model_id: str, payload: ModelInput):
-    if not database.get_model(model_id):
+    existing = database.get_model(model_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="מודל לא נמצא")
+    if existing["status"] == "פעיל":
+        raise HTTPException(
+            status_code=409,
+            detail=f'לא ניתן לערוך את המודל "{existing["name"]}" בעודו בסטטוס "פעיל". יש להחזירו לטיוטה תחילה.',
+        )
     cleaned = _clean_model_input(payload)
     if database.model_code_taken(cleaned["id"], exclude_id=model_id):
         raise HTTPException(status_code=409, detail="מודל עם קוד זה כבר קיים")
@@ -686,8 +755,18 @@ def update_model(model_id: str, payload: ModelInput):
 
 @app.delete("/api/models/{model_id}", status_code=204)
 def delete_model(model_id: str):
-    if not database.get_model(model_id):
+    existing = database.get_model(model_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="מודל לא נמצא")
+    linked = database.rankings_for_model(model_id)
+    if linked:
+        ids = ", ".join(r["id"] for r in linked[:5])
+        if len(linked) > 5:
+            ids += f" ועוד {len(linked) - 5} נוספים"
+        raise HTTPException(
+            status_code=409,
+            detail=f'לא ניתן למחוק את המודל "{existing["name"]}" — הוא משויך לתהליכי דירוג: {ids}.',
+        )
     database.delete_model(model_id)
 
 
@@ -698,6 +777,24 @@ def set_model_status(model_id: str, update: StatusUpdate):
     if update.status not in ("טיוטה", "פעיל"):
         raise HTTPException(status_code=422, detail="סטטוס לא תקין")
     return database.update_model_status(model_id, update.status)
+
+
+@app.post("/api/models/{model_id}/duplicate", status_code=201)
+def duplicate_model(model_id: str, payload: ModelDuplicateInput):
+    source = database.get_model(model_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="מודל לא נמצא")
+    new_id = payload.id.strip()
+    new_name = payload.name.strip()
+    if not new_id or not new_name:
+        raise HTTPException(status_code=422, detail="קוד מודל ושם מודל הם שדות חובה")
+    if database.model_code_taken(new_id):
+        raise HTTPException(status_code=409, detail="מודל עם קוד זה כבר קיים")
+    if database.model_name_taken(new_name):
+        raise HTTPException(status_code=409, detail="מודל עם שם זה כבר קיים")
+    return database.duplicate_model(
+        model_id, new_id, new_name, last_updated=date.today().strftime("%d/%m/%Y")
+    )
 
 
 @app.get("/api/rating-scales")
@@ -812,6 +909,12 @@ def _clean_questionnaire_input(payload: QuestionnaireInput):
                 "matrix_id": matrix_id,
             }
         )
+    total_weight = sum(p["weight"] for p in parameters)
+    if total_weight > 100:
+        raise HTTPException(
+            status_code=422,
+            detail=f"סך אחוזי המשקל של הפרמטרים חורג מ-100% (סה\"כ: {total_weight}%)",
+        )
     return {
         "id": questionnaire_id,
         "name": name,
@@ -833,8 +936,14 @@ def create_questionnaire(payload: QuestionnaireInput):
 
 @app.put("/api/questionnaires/{questionnaire_id}")
 def update_questionnaire(questionnaire_id: str, payload: QuestionnaireInput):
-    if not database.get_questionnaire(questionnaire_id):
+    existing = database.get_questionnaire(questionnaire_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="שאלון לא נמצא")
+    if existing["status"] == "פעיל":
+        raise HTTPException(
+            status_code=409,
+            detail=f'לא ניתן לערוך את השאלון "{existing["name"]}" בעודו בסטטוס "פעיל". יש להחזירו לטיוטה תחילה.',
+        )
     cleaned = _clean_questionnaire_input(payload)
     if database.questionnaire_code_taken(cleaned["id"], exclude_id=questionnaire_id):
         raise HTTPException(status_code=409, detail="שאלון עם קוד זה כבר קיים")
@@ -845,8 +954,18 @@ def update_questionnaire(questionnaire_id: str, payload: QuestionnaireInput):
 
 @app.delete("/api/questionnaires/{questionnaire_id}", status_code=204)
 def delete_questionnaire(questionnaire_id: str):
-    if not database.get_questionnaire(questionnaire_id):
+    existing = database.get_questionnaire(questionnaire_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="שאלון לא נמצא")
+    linked = database.models_using_questionnaire(questionnaire_id)
+    if linked:
+        names = ", ".join(f'{m["name"]} ({m["id"]})' for m in linked[:5])
+        if len(linked) > 5:
+            names += f" ועוד {len(linked) - 5} נוספים"
+        raise HTTPException(
+            status_code=409,
+            detail=f'לא ניתן למחוק את השאלון "{existing["name"]}" — הוא משויך למודלים: {names}.',
+        )
     database.delete_questionnaire(questionnaire_id)
 
 
@@ -900,6 +1019,7 @@ def _clean_role_input(payload: RoleInput):
         "can_approve": payload.can_approve,
         "can_committee_approve": payload.can_committee_approve,
         "can_rerun": payload.can_rerun,
+        "can_manage_notifications": payload.can_manage_notifications,
     }
 
 
@@ -1064,6 +1184,33 @@ def duplicate_matrix(matrix_id: str, payload: MatrixDuplicateInput):
     if database.matrix_name_taken(new_name):
         raise HTTPException(status_code=409, detail="מטריצה עם שם זה כבר קיימת")
     return database.duplicate_matrix(matrix_id, new_id, new_name)
+
+
+def _matrix_blocker_message(matrix_name: str, blockers: list[dict]) -> str:
+    parts = []
+    for b in blockers:
+        ids = ", ".join(b["process_ids"][:5])
+        if len(b["process_ids"]) > 5:
+            ids += f" ועוד {len(b['process_ids']) - 5} נוספים"
+        if b["via"] == "model":
+            parts.append(f'המודל "{b["model_name"]}" ({b["model_id"]}) — תהליכים: {ids}')
+        else:
+            parts.append(
+                f'השאלון "{b["questionnaire_name"]}" ({b["questionnaire_id"]}) '
+                f'המקושר למודל "{b["model_name"]}" ({b["model_id"]}) — תהליכים: {ids}'
+            )
+    return f'לא ניתן למחוק את המטריצה "{matrix_name}" — היא משויכת ל: ' + "; ".join(parts) + "."
+
+
+@app.delete("/api/matrices/{matrix_id}", status_code=204)
+def delete_matrix(matrix_id: str):
+    matrix = database.get_matrix(matrix_id)
+    if not matrix:
+        raise HTTPException(status_code=404, detail="מטריצה לא נמצאה")
+    blockers = database.matrix_delete_blockers(matrix_id)
+    if blockers:
+        raise HTTPException(status_code=409, detail=_matrix_blocker_message(matrix["name"], blockers))
+    database.delete_matrix(matrix_id)
 
 
 @app.get("/api/reports")
@@ -1250,3 +1397,34 @@ def get_notifications():
     database.refresh_expiry_notifications()
     rows = database.get_all_notifications()
     return {"rows": rows, "total": len(rows)}
+
+
+@app.get("/api/notification-rules")
+def get_notification_rules():
+    rows = database.get_all_notification_rules()
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.post("/api/notification-rules", status_code=201)
+def create_notification_rule(payload: NotificationRuleInput):
+    title = payload.title.strip()
+    message = payload.message.strip()
+    recipient_email = payload.recipient_email.strip()
+    type_ids = [t.strip() for t in payload.type_ids if t.strip()]
+    if not title or not message or not recipient_email:
+        raise HTTPException(status_code=422, detail="כותרת, הודעה וכתובת אימייל הם שדות חובה")
+    if "@" not in recipient_email:
+        raise HTTPException(status_code=422, detail="כתובת האימייל אינה תקינה")
+    if not type_ids:
+        raise HTTPException(status_code=422, detail="יש לבחור לפחות סוג התראה אחד")
+    for type_id in type_ids:
+        if not database.get_notification_type(type_id):
+            raise HTTPException(status_code=422, detail=f"סוג התראה לא נמצא: {type_id}")
+    return database.create_notification_rule(title, message, recipient_email, type_ids)
+
+
+@app.delete("/api/notification-rules/{rule_id}", status_code=204)
+def delete_notification_rule(rule_id: int):
+    if not any(r["id"] == rule_id for r in database.get_all_notification_rules()):
+        raise HTTPException(status_code=404, detail="התראה לא נמצאה")
+    database.delete_notification_rule(rule_id)

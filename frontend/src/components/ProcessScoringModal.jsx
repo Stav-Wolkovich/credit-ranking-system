@@ -36,7 +36,7 @@ function matrixCellScore(matrix, x, y) {
   return matrix.cell_values[yIndex]?.[xIndex] ?? null;
 }
 
-function ParameterField({ parameter, onAnswer, saving }) {
+function ParameterField({ parameter, onAnswer, saving, readOnly }) {
   const isSubjective = parameter.type === "סובייקטיבי";
   const isQuant = parameter.type === "כמותי";
   const isChoiceList = isSubjective || isQuant;
@@ -48,6 +48,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
   const [matrixY, setMatrixY] = useState(parameter.current_answer?.matrix_y ?? "");
 
   function handleMatrixChange(nextX, nextY) {
+    if (readOnly) return;
     setMatrixX(nextX);
     setMatrixY(nextY);
     if (nextX && nextY) onAnswer({ matrix_x: nextX, matrix_y: nextY });
@@ -73,14 +74,14 @@ function ParameterField({ parameter, onAnswer, saving }) {
                 padding: "6px 8px",
                 borderRadius: 6,
                 background: parameter.current_answer?.answer_id === a.id ? "#e8f0fe" : "transparent",
-                cursor: saving ? "default" : "pointer",
+                cursor: saving || readOnly ? "default" : "pointer",
               }}
             >
               <input
                 type="radio"
                 name={`param-${parameter.id}`}
                 checked={parameter.current_answer?.answer_id === a.id}
-                disabled={saving}
+                disabled={saving || readOnly}
                 onChange={() => onAnswer({ answer_id: a.id })}
               />
               <span style={{ flex: 1 }}>{a.text}</span>
@@ -153,7 +154,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
                         return (
                           <td
                             key={x}
-                            onClick={() => !saving && handleMatrixChange(x, y)}
+                            onClick={() => !saving && !readOnly && handleMatrixChange(x, y)}
                             style={{
                               border: selected ? "2px solid var(--accent)" : "1px solid var(--border)",
                               padding: "6px 10px",
@@ -161,7 +162,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
                               background: selected ? "#e8f0fe" : "#fff",
                               color: selected ? "var(--accent)" : "var(--text-dark)",
                               fontWeight: selected ? 700 : 400,
-                              cursor: saving ? "default" : "pointer",
+                              cursor: saving || readOnly ? "default" : "pointer",
                               whiteSpace: "nowrap",
                             }}
                           >
@@ -187,7 +188,7 @@ function ParameterField({ parameter, onAnswer, saving }) {
             type="number"
             step="0.1"
             value={numericDraft}
-            disabled={saving}
+            disabled={saving || readOnly}
             onChange={(e) => setNumericDraft(e.target.value)}
             onBlur={() => {
               const v = numericDraft === "" ? null : Number(numericDraft);
@@ -200,6 +201,8 @@ function ParameterField({ parameter, onAnswer, saving }) {
               borderRadius: 6,
               padding: "7px 10px",
               fontSize: 13,
+              background: readOnly ? "#f2f3f5" : "#fff",
+              color: readOnly ? "var(--text-light)" : "inherit",
             }}
           />
           <span style={{ fontSize: 11.5, color: "var(--text-light)" }}>פרמטר אובייקטיבי — הזנת ציון ישירה</span>
@@ -232,6 +235,13 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
 
   useEffect(() => {
+    // A תהליך created directly from a דירוג חיצוני has no model_id at all
+    // (see create_ranking_process()) — there's no scoring structure to
+    // fetch, just the rating recorded at creation time.
+    if (process.external_rating) {
+      setLoading(false);
+      return;
+    }
     api
       .getProcessScoring(process.id)
       .then((s) => {
@@ -254,6 +264,7 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
   }, [structure]);
 
   async function handleAnswer(parameterId, payload) {
+    if (PROCESS_TERMINAL_STATUSES.has(process.status)) return;
     setSaving(true);
     setError(null);
     // Optimistic local update so the radio/number reflects the pick immediately.
@@ -295,6 +306,14 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
 
   const isTerminal = PROCESS_TERMINAL_STATUSES.has(process.status);
   const busy = saving || statusAction !== null;
+  // A committee rejection only overrides the computed rating — the
+  // process itself becomes בתוקף immediately (see reject_committee_process()
+  // in the backend), so it's indistinguishable from a plain approval by
+  // status alone. Flag it by rejection_comment + a final rating that
+  // differs from the computed one instead.
+  const committeeOverride =
+    !!process.rejection_comment && process.status !== "הוחזר" && process.final_rating != null &&
+    process.final_rating !== process.computed_rating;
 
   return (
     <div
@@ -345,6 +364,28 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
         )}
 
         {loading && <div style={{ padding: "20px 0", textAlign: "center", color: "var(--text-light)", fontSize: 13 }}>טוען…</div>}
+
+        {!loading && process.external_rating && (
+          <div
+            style={{
+              border: "1px solid var(--border)",
+              background: "#f7f8fa",
+              borderRadius: 8,
+              padding: "16px 18px",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: 11.5, color: "var(--text-mid)", marginBottom: 6 }}>
+              דירוג חיצוני{process.external_rating_agency ? ` — ${process.external_rating_agency}` : ""}
+            </div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "var(--text-dark)" }}>{process.external_rating}</div>
+            {process.external_rating_date && (
+              <div style={{ fontSize: 12, color: "var(--text-light)", marginTop: 4 }}>
+                נכון לתאריך {process.external_rating_date}
+              </div>
+            )}
+          </div>
+        )}
 
         {!loading && structure && (
           <div style={{ display: "flex", gap: 18, overflow: "hidden", flex: 1 }}>
@@ -403,7 +444,11 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                   }}
                 >
                   <div style={{ fontSize: 11.5, color: "#b52d2d", fontWeight: 700, marginBottom: 4 }}>
-                    {process.status === "הוחזר" ? "הערת החזרה ממנהל" : "הערת דחייה מוועדה"}
+                    {process.status === "הוחזר"
+                      ? "הערת החזרה ממנהל — יש לתקן ולהגיש שוב"
+                      : committeeOverride
+                      ? "הערת ועדה — הדירוג הסופי נקבע בחריגה מהמחושב, התהליך בתוקף"
+                      : "הערת דחייה"}
                   </div>
                   <div style={{ fontSize: 12.5, color: "var(--text-dark)" }}>{process.rejection_comment}</div>
                 </div>
@@ -412,8 +457,8 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
               {process.final_rating && (
                 <div
                   style={{
-                    border: `1px solid ${process.status === "נדחה בועדה" ? "#e0a0a0" : "var(--border)"}`,
-                    background: process.status === "נדחה בועדה" ? "#fbe9e9" : "#f7f8fa",
+                    border: `1px solid ${committeeOverride ? "#e0a0a0" : "var(--border)"}`,
+                    background: committeeOverride ? "#fbe9e9" : "#f7f8fa",
                     borderRadius: 8,
                     padding: "10px 14px",
                     textAlign: "center",
@@ -425,7 +470,7 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                       style={{
                         fontSize: 18,
                         fontWeight: 700,
-                        color: process.status === "נדחה בועדה" ? "#b52d2d" : "var(--text-dark)",
+                        color: committeeOverride ? "#b52d2d" : "var(--text-dark)",
                       }}
                     >
                       {process.final_rating}
@@ -434,9 +479,9 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                       <span style={{ fontSize: 13, color: "var(--text-mid)" }}>{process.final_score}</span>
                     )}
                   </div>
-                  {process.status === "נדחה בועדה" && (
+                  {committeeOverride && (
                     <div style={{ fontSize: 11, color: "#b52d2d", marginTop: 4, fontWeight: 600 }}>
-                      ✕ נדחה על ידי הוועדה — שונה מהדירוג המחושב
+                      ✕ שונה מהדירוג המחושב על ידי הוועדה — התהליך בתוקף ולא ירוץ שוב
                     </div>
                   )}
                 </div>
@@ -507,6 +552,7 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
                       key={p.id}
                       parameter={p}
                       saving={saving}
+                      readOnly={isTerminal}
                       onAnswer={(payload) => handleAnswer(p.id, payload)}
                     />
                   ))}
@@ -546,21 +592,29 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
               <button
                 type="button"
                 onClick={() => runStatusAction("self_approve")}
-                disabled={busy}
-                style={{ ...STATUS_ACTION_BUTTON_STYLE, color: "var(--text-mid)", opacity: busy ? 0.7 : 1 }}
+                disabled={busy || !result?.complete}
+                title={!result?.complete ? "יש להשלים את כל השאלונים (100%) לפני העברה לתור אישורים" : undefined}
+                style={{
+                  ...STATUS_ACTION_BUTTON_STYLE,
+                  color: "var(--text-mid)",
+                  opacity: busy || !result?.complete ? 0.5 : 1,
+                  cursor: !result?.complete ? "not-allowed" : "pointer",
+                }}
               >
                 אישור עצמי
               </button>
               <button
                 type="button"
                 onClick={() => runStatusAction("submit")}
-                disabled={busy}
+                disabled={busy || !result?.complete}
+                title={!result?.complete ? "יש להשלים את כל השאלונים (100%) לפני העברה לתור אישורים" : undefined}
                 style={{
                   ...STATUS_ACTION_BUTTON_STYLE,
                   background: "var(--accent)",
                   color: "#fff",
                   border: "none",
-                  opacity: busy ? 0.7 : 1,
+                  opacity: busy || !result?.complete ? 0.5 : 1,
+                  cursor: !result?.complete ? "not-allowed" : "pointer",
                 }}
               >
                 {statusAction === "submit" ? "שולח…" : "הגשה לאישור"}

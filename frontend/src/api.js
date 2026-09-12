@@ -97,6 +97,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  duplicateModel: (id, payload) =>
+    request(`/models/${id}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getRatingScales: () => request("/rating-scales"),
   getRatingScale: (id) => request(`/rating-scales/${id}`),
   createRatingScale: (scale) =>
@@ -182,6 +187,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(matrix),
     }),
+  deleteMatrix: (id) => request(`/matrices/${id}`, { method: "DELETE" }),
   duplicateMatrix: (id, payload) =>
     request(`/matrices/${id}/duplicate`, {
       method: "POST",
@@ -209,4 +215,11 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getNotifications: () => request("/notifications"),
+  getNotificationRules: () => request("/notification-rules"),
+  createNotificationRule: (payload) =>
+    request("/notification-rules", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteNotificationRule: (id) => request(`/notification-rules/${id}`, { method: "DELETE" }),
 };

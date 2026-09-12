@@ -6,12 +6,24 @@ const FRAMEWORK_KIND_OPTIONS = [
   { value: "נכס", label: "נכס" },
 ];
 
+const RATING_TYPE_OPTIONS = [
+  { value: "internal", label: "פנימי (מודל ושאלונים)" },
+  { value: "external", label: "חיצוני (סוכנות דירוג)" },
+];
+
+const EXTERNAL_RATING_AGENCIES = ["מעלות", "מידרוג", "S&P", "Moody's", "Fitch"];
+
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
 export default function ProcessModal({ onCancel, onSaved }) {
+  const [ratingType, setRatingType] = useState("internal");
+  const [externalAgency, setExternalAgency] = useState("");
+  const [externalDate, setExternalDate] = useState("");
+  const [externalRating, setExternalRating] = useState("");
   const [frameworkKind, setFrameworkKind] = useState("מנפיק");
+  const [assetIssuerId, setAssetIssuerId] = useState("");
   const [frameworkQuery, setFrameworkQuery] = useState("");
   const [frameworkSelected, setFrameworkSelected] = useState(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -36,7 +48,8 @@ export default function ProcessModal({ onCancel, onSaved }) {
     api.getUsers().then((res) => setUsers(res.rows)).catch((err) => setError(err.message));
   }, []);
 
-  const frameworkOptions = frameworkKind === "מנפיק" ? issuers : assets;
+  const frameworkOptions =
+    frameworkKind === "מנפיק" ? issuers : assets.filter((a) => a.issuer_id === assetIssuerId);
 
   const filteredOptions = useMemo(() => {
     const q = frameworkQuery.trim().toLowerCase();
@@ -50,7 +63,8 @@ export default function ProcessModal({ onCancel, onSaved }) {
     setFrameworkKind(kind);
     setFrameworkSelected(null);
     setFrameworkQuery("");
-    setDropdownOpen(true);
+    setAssetIssuerId("");
+    setDropdownOpen(kind === "מנפיק");
   }
 
   function selectFramework(option) {
@@ -61,13 +75,23 @@ export default function ProcessModal({ onCancel, onSaved }) {
   function clearFramework() {
     setFrameworkSelected(null);
     setFrameworkQuery("");
-    setDropdownOpen(true);
+    setDropdownOpen(frameworkKind === "מנפיק" || !!assetIssuerId);
+  }
+
+  function changeAssetIssuer(issuerId) {
+    setAssetIssuerId(issuerId);
+    setFrameworkSelected(null);
+    setFrameworkQuery("");
+    setDropdownOpen(!!issuerId);
   }
 
   function validate() {
     const missing = new Set();
+    if (frameworkKind === "נכס" && !assetIssuerId) missing.add("assetIssuer");
     if (!frameworkSelected) missing.add("framework");
-    if (!modelId) missing.add("model");
+    if (ratingType === "internal" && !modelId) missing.add("model");
+    if (ratingType === "external" && !externalDate) missing.add("externalDate");
+    if (ratingType === "external" && !externalRating.trim()) missing.add("externalRating");
     if (!ownerId) missing.add("owner");
     setFieldErrors(missing);
     return missing.size === 0;
@@ -78,12 +102,15 @@ export default function ProcessModal({ onCancel, onSaved }) {
     setSaving(true);
     setError(null);
     const payload = {
-      model_id: modelId,
+      model_id: ratingType === "internal" ? modelId : null,
       kind: frameworkKind,
       framework_issuer_id: frameworkKind === "מנפיק" ? frameworkSelected.id : null,
       framework_asset_id: frameworkKind === "נכס" ? frameworkSelected.id : null,
       data_date: dataDate || null,
       owner: ownerId,
+      external_rating_agency: ratingType === "external" ? externalAgency || null : null,
+      external_rating_date: ratingType === "external" ? externalDate : null,
+      external_rating: ratingType === "external" ? externalRating.trim() : null,
     };
     try {
       const saved = await api.createProcess(payload);
@@ -139,6 +166,37 @@ export default function ProcessModal({ onCancel, onSaved }) {
         )}
 
         <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>סוג דירוג *</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {RATING_TYPE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setRatingType(opt.value)}
+                style={{
+                  flex: 1,
+                  border: `1px solid ${ratingType === opt.value ? "var(--accent)" : "var(--border)"}`,
+                  background: ratingType === opt.value ? "var(--accent)" : "#fff",
+                  color: ratingType === opt.value ? "#fff" : "var(--text-mid)",
+                  borderRadius: 6,
+                  padding: "7px 4px",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {ratingType === "external" && (
+            <div style={{ fontSize: 11.5, color: "var(--text-light)", marginTop: 4 }}>
+              תהליך המבוסס על דירוג שכבר ניתן על ידי סוכנות חיצונית — ללא מודל ושאלונים, ייפתח ישירות בסטטוס בתוקף.
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>מסגרת *</div>
           {fieldErrors.has("framework") && (
             <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ שדה חובה</div>
@@ -166,6 +224,34 @@ export default function ProcessModal({ onCancel, onSaved }) {
             ))}
           </div>
 
+          {frameworkKind === "נכס" && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 4 }}>מנפיק *</div>
+              {fieldErrors.has("assetIssuer") && (
+                <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ יש לבחור מנפיק תחילה</div>
+              )}
+              <select
+                value={assetIssuerId}
+                onChange={(e) => changeAssetIssuer(e.target.value)}
+                style={{
+                  width: "100%",
+                  border: `1px solid ${fieldErrors.has("assetIssuer") ? "#e0a0a0" : "var(--border)"}`,
+                  borderRadius: 6,
+                  padding: "9px 12px",
+                  fontSize: 13,
+                  background: "#fff",
+                }}
+              >
+                <option value="">בחר מנפיק</option>
+                {issuers.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name} ({i.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {frameworkSelected ? (
             <div
               style={{
@@ -190,6 +276,10 @@ export default function ProcessModal({ onCancel, onSaved }) {
               >
                 ✕
               </button>
+            </div>
+          ) : frameworkKind === "נכס" && !assetIssuerId ? (
+            <div style={{ fontSize: 12, color: "var(--text-light)", padding: "6px 2px" }}>
+              יש לבחור מנפיק כדי לבחור נכס משויך אליו.
             </div>
           ) : (
             <div style={{ position: "relative" }}>
@@ -254,36 +344,104 @@ export default function ProcessModal({ onCancel, onSaved }) {
           )}
         </div>
 
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>מודל דירוג *</div>
-          {fieldErrors.has("model") && (
-            <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ שדה חובה</div>
-          )}
-          <select
-            value={modelId}
-            onChange={(e) => setModelId(e.target.value)}
-            style={{
-              width: "100%",
-              border: `1px solid ${fieldErrors.has("model") ? "#e0a0a0" : "var(--border)"}`,
-              borderRadius: 6,
-              padding: "9px 12px",
-              fontSize: 13,
-              background: "#fff",
-            }}
-          >
-            <option value="">בחר מודל</option>
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name} ({m.id}) – {m.active_version}
-              </option>
-            ))}
-          </select>
-          {models.length === 0 && (
-            <div style={{ fontSize: 11.5, color: "var(--text-light)", marginTop: 4 }}>
-              אין מודלים זמינים ליצירת תהליך — נדרש מודל בסטטוס פעיל עם שאלון אחד לפחות מקושר.
+        {ratingType === "internal" ? (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>מודל דירוג *</div>
+            {fieldErrors.has("model") && (
+              <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ שדה חובה</div>
+            )}
+            <select
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              style={{
+                width: "100%",
+                border: `1px solid ${fieldErrors.has("model") ? "#e0a0a0" : "var(--border)"}`,
+                borderRadius: 6,
+                padding: "9px 12px",
+                fontSize: 13,
+                background: "#fff",
+              }}
+            >
+              <option value="">בחר מודל</option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.id}) – {m.active_version}
+                </option>
+              ))}
+            </select>
+            {models.length === 0 && (
+              <div style={{ fontSize: 11.5, color: "var(--text-light)", marginTop: 4 }}>
+                אין מודלים זמינים ליצירת תהליך — נדרש מודל בסטטוס פעיל עם שאלון אחד לפחות מקושר.
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>תאריך דירוג חיצוני *</div>
+              {fieldErrors.has("externalDate") && (
+                <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ שדה חובה</div>
+              )}
+              <input
+                type="date"
+                value={externalDate}
+                onChange={(e) => setExternalDate(e.target.value)}
+                style={{
+                  width: "100%",
+                  border: `1px solid ${fieldErrors.has("externalDate") ? "#e0a0a0" : "var(--border)"}`,
+                  borderRadius: 6,
+                  padding: "9px 12px",
+                  fontSize: 13,
+                }}
+              />
             </div>
-          )}
-        </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>דירוג (אות) *</div>
+              {fieldErrors.has("externalRating") && (
+                <div style={{ fontSize: 11.5, color: "#b52d2d", marginBottom: 4 }}>⚠ שדה חובה</div>
+              )}
+              <input
+                type="text"
+                value={externalRating}
+                onChange={(e) => setExternalRating(e.target.value)}
+                placeholder="לדוגמה: AA+"
+                dir="ltr"
+                style={{
+                  width: "100%",
+                  border: `1px solid ${fieldErrors.has("externalRating") ? "#e0a0a0" : "var(--border)"}`,
+                  borderRadius: 6,
+                  padding: "9px 12px",
+                  fontSize: 13,
+                  textAlign: "right",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>סוכנות (אופציונלי)</div>
+              <select
+                value={externalAgency}
+                onChange={(e) => setExternalAgency(e.target.value)}
+                style={{
+                  width: "100%",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  padding: "9px 12px",
+                  fontSize: 13,
+                  background: "#fff",
+                }}
+              >
+                <option value="">-</option>
+                {EXTERNAL_RATING_AGENCIES.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
 
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>אחראי תהליך *</div>

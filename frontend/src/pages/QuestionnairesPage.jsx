@@ -63,6 +63,10 @@ export default function QuestionnairesPage() {
       .catch((err) => setError(err.message));
   }
 
+  function handleEdit(questionnaire) {
+    setModal({ mode: "edit", questionnaire });
+  }
+
   function toggleStatus(questionnaire) {
     const nextStatus = questionnaire.status === "פעיל" ? "טיוטה" : "פעיל";
     api
@@ -165,11 +169,11 @@ export default function QuestionnairesPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setModal({ mode: "edit", questionnaire: r })}
-                    aria-label="עריכה"
+                    onClick={() => handleEdit(r)}
+                    aria-label={r.status === "פעיל" ? "צפייה" : "עריכה"}
                     style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-mid)" }}
                   >
-                    ✎
+                    {r.status === "פעיל" ? "👁" : "✎"}
                   </button>
                   <button
                     type="button"

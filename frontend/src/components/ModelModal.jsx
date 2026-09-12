@@ -25,7 +25,7 @@ function StepBadge({ n, active }) {
   );
 }
 
-function Field({ label, required, invalid, value, onChange }) {
+function Field({ label, required, invalid, value, onChange, disabled }) {
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>
@@ -39,12 +39,15 @@ function Field({ label, required, invalid, value, onChange }) {
         type="text"
         value={value}
         onChange={onChange}
+        disabled={disabled}
         style={{
           width: "100%",
           border: `1px solid ${invalid ? "#e0a0a0" : "var(--border)"}`,
           borderRadius: 6,
           padding: "9px 12px",
           fontSize: 13,
+          background: disabled ? "#f2f3f5" : "#fff",
+          color: disabled ? "var(--text-light)" : "inherit",
         }}
       />
     </div>
@@ -59,6 +62,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
     family: initial?.family ?? "",
     domain: initial?.domain ?? DOMAIN_OPTIONS[0],
     owner: initial?.owner ?? "",
+    active_version: initial?.active_version ?? "v1",
     description: initial?.description ?? "",
     rating_scale_id: initial?.rating_scale_id ?? "",
   });
@@ -90,19 +94,25 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
       .catch((err) => setError(err.message));
   }, []);
 
-  const title = mode === "create" ? "צור מודל" : "עריכה";
+  const readOnly = mode === "edit" && initial?.status === "פעיל";
+  const title = mode === "create" ? "צור מודל" : readOnly ? "צפייה במודל" : "עריכה";
 
   const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
 
   const filteredQuestionnaires = useMemo(() => {
     const q = questionnaireSearch.trim().toLowerCase();
-    if (!q) return questionnaires;
-    return questionnaires.filter(
+    // Only questionnaires that are פעיל can be newly associated with a model —
+    // already-linked ones still show (and stay removable) in the "selected"
+    // list above regardless of their current status.
+    const active = questionnaires.filter((item) => item.status === "פעיל");
+    if (!q) return active;
+    return active.filter(
       (item) => item.id.toLowerCase().includes(q) || item.description.toLowerCase().includes(q)
     );
   }, [questionnaires, questionnaireSearch]);
 
   function toggleQuestionnaire(id) {
+    if (readOnly) return;
     setSelected((prev) => {
       if (prev.some((q) => q.id === id)) return prev.filter((q) => q.id !== id);
       return [...prev, { id, weight: 0 }];
@@ -110,10 +120,12 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
   }
 
   function setWeight(id, weight) {
+    if (readOnly) return;
     setSelected((prev) => prev.map((q) => (q.id === id ? { ...q, weight } : q)));
   }
 
   function moveQuestionnaire(index, direction) {
+    if (readOnly) return;
     setSelected((prev) => {
       const next = [...prev];
       const target = index + direction;
@@ -124,6 +136,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
   }
 
   function removeSelected(id) {
+    if (readOnly) return;
     setSelected((prev) => prev.filter((q) => q.id !== id));
   }
 
@@ -158,6 +171,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
       family: form.family.trim(),
       domain: form.domain,
       owner: form.owner.trim(),
+      active_version: form.active_version.trim() || "v1",
       description: form.description.trim() || null,
       questionnaires: selected.map((q) => ({ id: q.id, weight: Number(q.weight) || 0 })),
       rating_scale_id: form.rating_scale_id || null,
@@ -188,7 +202,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
       <div style={{ background: "#fff", borderRadius: 10, width: step === 2 ? 620 : 460, maxWidth: "90vw", padding: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-dark)", display: "flex", gap: 8, alignItems: "center" }}>
-            {title} <span>{mode === "create" ? "➕" : "✎"}</span>
+            {title} <span>{mode === "create" ? "➕" : readOnly ? "👁" : "✎"}</span>
           </div>
           <button
             type="button"
@@ -261,28 +275,46 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
 
         {step === 1 && (
           <>
-            <Field label="קוד מודל" required invalid={fieldErrors.has("id")} value={form.id} onChange={set("id")} />
-            <Field label="שם מודל" required invalid={fieldErrors.has("name")} value={form.name} onChange={set("name")} />
+            <Field
+              label="קוד מודל"
+              required
+              invalid={fieldErrors.has("id")}
+              value={form.id}
+              onChange={set("id")}
+              disabled={readOnly}
+            />
+            <Field
+              label="שם מודל"
+              required
+              invalid={fieldErrors.has("name")}
+              value={form.name}
+              onChange={set("name")}
+              disabled={readOnly}
+            />
             <Field
               label="משפחה"
               required
               invalid={fieldErrors.has("family")}
               value={form.family}
               onChange={set("family")}
+              disabled={readOnly}
             />
+            <Field label="גרסה" value={form.active_version} onChange={set("active_version")} disabled={readOnly} />
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 4 }}>תחום *</div>
               <select
                 value={form.domain}
                 onChange={set("domain")}
+                disabled={readOnly}
                 style={{
                   width: "100%",
                   border: "1px solid var(--border)",
                   borderRadius: 6,
                   padding: "9px 12px",
                   fontSize: 13,
-                  background: "#fff",
+                  background: readOnly ? "#f2f3f5" : "#fff",
+                  color: readOnly ? "var(--text-light)" : "inherit",
                 }}
               >
                 {DOMAIN_OPTIONS.map((d) => (
@@ -301,13 +333,15 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
               <select
                 value={form.owner}
                 onChange={set("owner")}
+                disabled={readOnly}
                 style={{
                   width: "100%",
                   border: `1px solid ${fieldErrors.has("owner") ? "#e0a0a0" : "var(--border)"}`,
                   borderRadius: 6,
                   padding: "9px 12px",
                   fontSize: 13,
-                  background: "#fff",
+                  background: readOnly ? "#f2f3f5" : "#fff",
+                  color: readOnly ? "var(--text-light)" : "inherit",
                 }}
               >
                 <option value="">–</option>
@@ -327,13 +361,15 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
               <select
                 value={form.rating_scale_id}
                 onChange={set("rating_scale_id")}
+                disabled={readOnly}
                 style={{
                   width: "100%",
                   border: `1px solid ${fieldErrors.has("rating_scale_id") ? "#e0a0a0" : "var(--border)"}`,
                   borderRadius: 6,
                   padding: "9px 12px",
                   fontSize: 13,
-                  background: "#fff",
+                  background: readOnly ? "#f2f3f5" : "#fff",
+                  color: readOnly ? "var(--text-light)" : "inherit",
                 }}
               >
                 <option value="">בחר סולם דירוג</option>
@@ -351,6 +387,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
                 value={form.description}
                 onChange={set("description")}
                 rows={3}
+                disabled={readOnly}
                 style={{
                   width: "100%",
                   border: "1px solid var(--border)",
@@ -359,6 +396,8 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
                   fontSize: 13,
                   fontFamily: "inherit",
                   resize: "vertical",
+                  background: readOnly ? "#f2f3f5" : "#fff",
+                  color: readOnly ? "var(--text-light)" : "inherit",
                 }}
               />
             </div>
@@ -368,7 +407,9 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
         {step === 2 && (
           <>
             <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 12 }}>
-              סמן שאלונים קיימים לקישור למודל, קבע את סדר הצגתם ואת המשקל (%) של כל שאלון בציון הסופי.
+              {readOnly
+                ? "רשימת השאלונים המקושרים למודל, סדר הצגתם והמשקל (%) של כל שאלון בציון הסופי."
+                : "סמן שאלונים קיימים לקישור למודל, קבע את סדר הצגתם ואת המשקל (%) של כל שאלון בציון הסופי."}
             </div>
 
             {selected.length > 0 && (
@@ -403,40 +444,42 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
                           fontSize: 13,
                         }}
                       >
-                        <div style={{ display: "flex", flexDirection: "column" }}>
-                          <button
-                            type="button"
-                            onClick={() => moveQuestionnaire(i, -1)}
-                            disabled={i === 0}
-                            aria-label="הזז למעלה"
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              cursor: i === 0 ? "default" : "pointer",
-                              color: i === 0 ? "#c7ccd4" : "var(--text-mid)",
-                              lineHeight: 1,
-                              fontSize: 12,
-                            }}
-                          >
-                            ▲
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => moveQuestionnaire(i, 1)}
-                            disabled={i === selected.length - 1}
-                            aria-label="הזז למטה"
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              cursor: i === selected.length - 1 ? "default" : "pointer",
-                              color: i === selected.length - 1 ? "#c7ccd4" : "var(--text-mid)",
-                              lineHeight: 1,
-                              fontSize: 12,
-                            }}
-                          >
-                            ▼
-                          </button>
-                        </div>
+                        {!readOnly && (
+                          <div style={{ display: "flex", flexDirection: "column" }}>
+                            <button
+                              type="button"
+                              onClick={() => moveQuestionnaire(i, -1)}
+                              disabled={i === 0}
+                              aria-label="הזז למעלה"
+                              style={{
+                                background: "transparent",
+                                border: "none",
+                                cursor: i === 0 ? "default" : "pointer",
+                                color: i === 0 ? "#c7ccd4" : "var(--text-mid)",
+                                lineHeight: 1,
+                                fontSize: 12,
+                              }}
+                            >
+                              ▲
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveQuestionnaire(i, 1)}
+                              disabled={i === selected.length - 1}
+                              aria-label="הזז למטה"
+                              style={{
+                                background: "transparent",
+                                border: "none",
+                                cursor: i === selected.length - 1 ? "default" : "pointer",
+                                color: i === selected.length - 1 ? "#c7ccd4" : "var(--text-mid)",
+                                lineHeight: 1,
+                                fontSize: 12,
+                              }}
+                            >
+                              ▼
+                            </button>
+                          </div>
+                        )}
                         <span style={{ color: "var(--text-light)", fontSize: 12, minWidth: 14 }}>{i + 1}</span>
                         <span style={{ fontWeight: 600, color: "var(--text-dark)", whiteSpace: "nowrap" }}>{sel.id}</span>
                         <span style={{ color: "var(--text-mid)", flex: 1 }}>{q?.description ?? ""}</span>
@@ -446,6 +489,7 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
                           max={100}
                           value={sel.weight}
                           onChange={(e) => setWeight(sel.id, Number(e.target.value))}
+                          disabled={readOnly}
                           style={{
                             width: 60,
                             border: "1px solid var(--border)",
@@ -453,17 +497,21 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
                             padding: "6px 8px",
                             fontSize: 13,
                             textAlign: "center",
+                            background: readOnly ? "#f2f3f5" : "#fff",
+                            color: readOnly ? "var(--text-light)" : "inherit",
                           }}
                         />
                         <span style={{ color: "var(--text-mid)" }}>%</span>
-                        <button
-                          type="button"
-                          onClick={() => removeSelected(sel.id)}
-                          aria-label="הסר שאלון"
-                          style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
-                        >
-                          ✕
-                        </button>
+                        {!readOnly && (
+                          <button
+                            type="button"
+                            onClick={() => removeSelected(sel.id)}
+                            aria-label="הסר שאלון"
+                            style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
                     );
                   })}
@@ -471,49 +519,53 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
               </div>
             )}
 
-            <input
-              type="text"
-              placeholder="חיפוש שאלון..."
-              value={questionnaireSearch}
-              onChange={(e) => setQuestionnaireSearch(e.target.value)}
-              style={{
-                width: "100%",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                padding: "8px 12px",
-                fontSize: 13,
-                marginBottom: 10,
-              }}
-            />
-            <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
-              {filteredQuestionnaires.length === 0 && (
-                <div style={{ padding: 14, fontSize: 13, color: "var(--text-light)", textAlign: "center" }}>
-                  אין שאלונים תואמים.
-                </div>
-              )}
-              {filteredQuestionnaires.map((q) => (
-                <label
-                  key={q.id}
+            {!readOnly && (
+              <>
+                <input
+                  type="text"
+                  placeholder="חיפוש שאלון..."
+                  value={questionnaireSearch}
+                  onChange={(e) => setQuestionnaireSearch(e.target.value)}
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "10px 12px",
-                    borderBottom: "1px solid var(--border)",
+                    width: "100%",
+                    border: "1px solid var(--border)",
+                    borderRadius: 6,
+                    padding: "8px 12px",
                     fontSize: 13,
-                    cursor: "pointer",
+                    marginBottom: 10,
                   }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.some((s) => s.id === q.id)}
-                    onChange={() => toggleQuestionnaire(q.id)}
-                  />
-                  <span style={{ fontWeight: 600, color: "var(--text-dark)", whiteSpace: "nowrap" }}>{q.id}</span>
-                  <span style={{ color: "var(--text-mid)" }}>{q.description}</span>
-                </label>
-              ))}
-            </div>
+                />
+                <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
+                  {filteredQuestionnaires.length === 0 && (
+                    <div style={{ padding: 14, fontSize: 13, color: "var(--text-light)", textAlign: "center" }}>
+                      אין שאלונים תואמים.
+                    </div>
+                  )}
+                  {filteredQuestionnaires.map((q) => (
+                    <label
+                      key={q.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "10px 12px",
+                        borderBottom: "1px solid var(--border)",
+                        fontSize: 13,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected.some((s) => s.id === q.id)}
+                        onChange={() => toggleQuestionnaire(q.id)}
+                      />
+                      <span style={{ fontWeight: 600, color: "var(--text-dark)", whiteSpace: "nowrap" }}>{q.id}</span>
+                      <span style={{ color: "var(--text-mid)" }}>{q.description}</span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
           </>
         )}
 
@@ -532,10 +584,10 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
               cursor: "pointer",
             }}
           >
-            ביטול
+            {readOnly ? "סגור" : "ביטול"}
           </button>
 
-          {step === 1 && (
+          {step === 1 && !readOnly && (
             <button
               type="button"
               onClick={handleNext}
@@ -572,24 +624,26 @@ export default function ModelModal({ mode, initial, onCancel, onSaved }) {
               >
                 → חזרה
               </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                style={{
-                  background: "var(--accent)",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 6,
-                  padding: "9px 18px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: saving ? "default" : "pointer",
-                  opacity: saving ? 0.7 : 1,
-                }}
-              >
-                {saving ? "שומר…" : "שמירה"}
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving}
+                  style={{
+                    background: "var(--accent)",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 6,
+                    padding: "9px 18px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: saving ? "default" : "pointer",
+                    opacity: saving ? 0.7 : 1,
+                  }}
+                >
+                  {saving ? "שומר…" : "שמירה"}
+                </button>
+              )}
             </>
           )}
         </div>
