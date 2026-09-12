@@ -235,6 +235,13 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
 
   useEffect(() => {
+    // A תהליך created directly from a דירוג חיצוני has no model_id at all
+    // (see create_ranking_process()) — there's no scoring structure to
+    // fetch, just the rating recorded at creation time.
+    if (process.external_rating) {
+      setLoading(false);
+      return;
+    }
     api
       .getProcessScoring(process.id)
       .then((s) => {
@@ -357,6 +364,28 @@ export default function ProcessScoringModal({ process, onCancel, onUpdated }) {
         )}
 
         {loading && <div style={{ padding: "20px 0", textAlign: "center", color: "var(--text-light)", fontSize: 13 }}>טוען…</div>}
+
+        {!loading && process.external_rating && (
+          <div
+            style={{
+              border: "1px solid var(--border)",
+              background: "#f7f8fa",
+              borderRadius: 8,
+              padding: "16px 18px",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: 11.5, color: "var(--text-mid)", marginBottom: 6 }}>
+              דירוג חיצוני{process.external_rating_agency ? ` — ${process.external_rating_agency}` : ""}
+            </div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "var(--text-dark)" }}>{process.external_rating}</div>
+            {process.external_rating_date && (
+              <div style={{ fontSize: 12, color: "var(--text-light)", marginTop: 4 }}>
+                נכון לתאריך {process.external_rating_date}
+              </div>
+            )}
+          </div>
+        )}
 
         {!loading && structure && (
           <div style={{ display: "flex", gap: 18, overflow: "hidden", flex: 1 }}>

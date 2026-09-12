@@ -215,4 +215,11 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getNotifications: () => request("/notifications"),
+  getNotificationRules: () => request("/notification-rules"),
+  createNotificationRule: (payload) =>
+    request("/notification-rules", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteNotificationRule: (id) => request(`/notification-rules/${id}`, { method: "DELETE" }),
 };

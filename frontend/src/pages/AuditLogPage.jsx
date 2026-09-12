@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
-import { PageHeader, ErrorBanner } from "../components/ui.jsx";
+import { PageHeader, ErrorBanner, ConfirmDialog } from "../components/ui.jsx";
 import NotificationTypeEmailModal from "../components/NotificationTypeEmailModal.jsx";
+import CreateNotificationRuleModal from "../components/CreateNotificationRuleModal.jsx";
 
 const LOG_COLUMNS = ["תאריך ושעה", "סוג התראה", "בוצע על ידי", "הודעה", "ערוצים", "אימייל", "סטטוס שליחה"];
 const TYPE_COLUMNS = ["תיאור", "טריגר", "נמען", "ערוץ", "תזמון", "אימייל להתראות", "פעולות"];
+const RULE_COLUMNS = ["כותרת", "סוגי אירוע", "נמען", "פעולות"];
 
 const CHANNEL_LABELS = { email: "אימייל", internal: "פנימי" };
 
@@ -130,6 +132,11 @@ function NotificationTypesTab() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editTarget, setEditTarget] = useState(null);
+  const [rulesData, setRulesData] = useState(null);
+  const [rulesError, setRulesError] = useState(null);
+  const [rulesLoading, setRulesLoading] = useState(true);
+  const [creatingRule, setCreatingRule] = useState(false);
+  const [deleteRuleTarget, setDeleteRuleTarget] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -140,11 +147,31 @@ function NotificationTypesTab() {
       .finally(() => setLoading(false));
   }, []);
 
+  const loadRules = useCallback(() => {
+    setRulesLoading(true);
+    return api
+      .getNotificationRules()
+      .then((res) => setRulesData(res))
+      .catch((err) => setRulesError(err.message))
+      .finally(() => setRulesLoading(false));
+  }, []);
+
   useEffect(() => {
     load();
-  }, [load]);
+    loadRules();
+  }, [load, loadRules]);
 
   const rows = data?.rows ?? [];
+  const rules = rulesData?.rows ?? [];
+
+  function confirmDeleteRule() {
+    const rule = deleteRuleTarget;
+    setDeleteRuleTarget(null);
+    api
+      .deleteNotificationRule(rule.id)
+      .then(() => loadRules())
+      .catch((err) => setRulesError(err.message));
+  }
 
   return (
     <div>
@@ -211,6 +238,96 @@ function NotificationTypesTab() {
         </table>
       </div>
 
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 26, marginBottom: 10 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-dark)" }}>התראות מותאמות אישית</div>
+        <button
+          type="button"
+          onClick={() => setCreatingRule(true)}
+          style={{
+            background: "var(--accent)",
+            color: "#fff",
+            border: "none",
+            borderRadius: 6,
+            padding: "9px 16px",
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          + יצירת התראה חדשה
+        </button>
+      </div>
+
+      {rulesError && <ErrorBanner message={rulesError} />}
+
+      <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" }}>
+        <table>
+          <thead>
+            <tr style={{ background: "var(--navy)" }}>
+              {RULE_COLUMNS.map((c) => (
+                <th key={c} style={{ color: "#fff", fontWeight: 600, fontSize: 12.5, padding: "12px 16px", whiteSpace: "nowrap" }}>
+                  {c}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rulesLoading && (
+              <tr>
+                <td colSpan={RULE_COLUMNS.length} style={{ padding: 16, color: "var(--text-light)", textAlign: "center" }}>
+                  טוען נתונים…
+                </td>
+              </tr>
+            )}
+            {!rulesLoading && rules.length === 0 && !rulesError && (
+              <tr>
+                <td colSpan={RULE_COLUMNS.length} style={{ padding: 16, color: "var(--text-light)", textAlign: "center" }}>
+                  אין התראות מותאמות אישית מוגדרות.
+                </td>
+              </tr>
+            )}
+            {rules.map((r) => (
+              <tr key={r.id} style={{ borderTop: "1px solid var(--border)" }}>
+                <td style={{ padding: "12px 16px", fontWeight: 600 }}>{r.title}</td>
+                <td style={{ padding: "12px 16px" }}>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {r.types.map((t) => (
+                      <span
+                        key={t.id}
+                        style={{
+                          fontSize: 11,
+                          border: "1px solid var(--border)",
+                          borderRadius: 10,
+                          padding: "1px 8px",
+                          color: "var(--text-mid)",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {t.name}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td style={{ padding: "12px 16px", color: "var(--text-mid)" }} dir="ltr">
+                  {r.recipient_email}
+                </td>
+                <td style={{ padding: "12px 16px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteRuleTarget(r)}
+                    aria-label="מחיקה"
+                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#b52d2d" }}
+                  >
+                    🗑
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
       {editTarget && (
         <NotificationTypeEmailModal
           notificationType={editTarget}
@@ -219,6 +336,26 @@ function NotificationTypesTab() {
             setEditTarget(null);
             load();
           }}
+        />
+      )}
+
+      {creatingRule && (
+        <CreateNotificationRuleModal
+          notificationTypes={rows}
+          onCancel={() => setCreatingRule(false)}
+          onSaved={() => {
+            setCreatingRule(false);
+            loadRules();
+          }}
+        />
+      )}
+
+      {deleteRuleTarget && (
+        <ConfirmDialog
+          title="מחיקה"
+          message={`למחוק את ההתראה "${deleteRuleTarget.title}"?`}
+          onCancel={() => setDeleteRuleTarget(null)}
+          onConfirm={confirmDeleteRule}
         />
       )}
     </div>

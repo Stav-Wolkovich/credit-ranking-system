@@ -42,6 +42,20 @@ than the one computed). ranking_processes doesn't store model_id/team_id
 itself; get_processes_by_status() joins those in from the matching
 rankings row via _attach_process_context() for display.
 
+external_rating/external_rating_date/external_rating_agency are the
+alternative to the normal model_id-driven flow: create_ranking_process()
+lets a תהליך be created directly from an already-issued third-party
+rating instead of a model — no model_id, no questionnaires, nothing to
+compute or approve — so it's created straight at בתוקף, with the
+external rating's own date doubling as approval_date. external_rating_agency
+is free text but the UI offers מעלות/מידרוג/S&P/Moody's/Fitch as quick
+picks. get_all_rankings() joins these into the report page's row the
+same way it joins final_score/computed_score, so the external rating
+shows as an extension of the internal one on the same row (for a
+model-driven process the three columns are simply empty). There's no
+dedicated endpoint to edit them afterward — they're set once, at
+creation, same as picking a model is for the normal flow.
+
 The תור אישורים (approvals queue) page is a two-stage workflow over
 ranking_processes.status: "בתהליך" (awaiting manager review) →
 approve_manager moves it to "ממתין לוועדה" (awaiting committee review) →
@@ -178,9 +192,11 @@ its owner's current team rather than a frozen copy.
 
 Roles columns are the fields the roles permission-matrix page displays:
 id (AD group code, e.g. RATING_ADMIN), name (Hebrew display name),
-name_en, description, and seven boolean permission flags (can_view,
+name_en, description, and eight boolean permission flags (can_view,
 can_create, can_edit, can_delete, can_approve, can_committee_approve,
-can_rerun) rendered as the matrix's checkmark columns.
+can_rerun, can_manage_notifications — add/edit the custom notification
+rules on the סוגי התראות tab, see notification_rules) rendered as the
+matrix's checkmark columns.
 
 Matrices columns are the fields the matrices page displays: id (matrix
 code), name, type (e.g. רשת 2D), model_id (the model the matrix belongs
@@ -463,6 +479,7 @@ SEED_ROLE_ROWS = [
         "description": "פתיחת תהליכי דירוג, מילוי שאלונים, הזנת נתונים כמותיים, שליחה לאישור",
         "can_view": True, "can_create": True, "can_edit": True, "can_delete": False,
         "can_approve": False, "can_committee_approve": False, "can_rerun": False,
+        "can_manage_notifications": False,
     },
     {
         "id": "RATING_APPROVER",
@@ -471,6 +488,7 @@ SEED_ROLE_ROWS = [
         "description": "בדיקת דירוגים, אישור או החזרה עם הערות. הפרדת סמכויות - לא יכול לאשר דירוג שהוא עצמו יצר",
         "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
         "can_approve": True, "can_committee_approve": False, "can_rerun": False,
+        "can_manage_notifications": False,
     },
     {
         "id": "RATING_ADMIN",
@@ -479,6 +497,7 @@ SEED_ROLE_ROWS = [
         "description": "ניהול כל המטא-דאטה: מודלים, שאלונים, פרמטרים, תשובות, נוסחאות, מטריצות, טבלאות המרה",
         "can_view": True, "can_create": True, "can_edit": True, "can_delete": True,
         "can_approve": False, "can_committee_approve": False, "can_rerun": True,
+        "can_manage_notifications": False,
     },
     {
         "id": "RATING_VIEWER",
@@ -487,6 +506,7 @@ SEED_ROLE_ROWS = [
         "description": "צפייה בלבד בדירוגים, דוחות ולוח בקרה",
         "can_view": True, "can_create": False, "can_edit": False, "can_delete": False,
         "can_approve": False, "can_committee_approve": False, "can_rerun": False,
+        "can_manage_notifications": False,
     },
     {
         "id": "RATING_SYSADMIN",
@@ -495,6 +515,7 @@ SEED_ROLE_ROWS = [
         "description": "ניהול טכני - ג'ובים, אודיט, הרשאות, הגדרות מערכת",
         "can_view": True, "can_create": True, "can_edit": True, "can_delete": True,
         "can_approve": False, "can_committee_approve": False, "can_rerun": True,
+        "can_manage_notifications": True,
     },
 ]
 
@@ -857,7 +878,10 @@ def init_db():
             computed_rating TEXT,
             completion INTEGER NOT NULL DEFAULT 0,
             owner TEXT REFERENCES users(id),
-            rejection_comment TEXT
+            rejection_comment TEXT,
+            external_rating_agency TEXT,
+            external_rating_date TEXT,
+            external_rating TEXT
         )
         """
     )
@@ -891,6 +915,9 @@ def init_db():
         conn.execute("ALTER TABLE ranking_processes ADD COLUMN owner TEXT REFERENCES users(id)")
     if "rejection_comment" not in process_columns:
         conn.execute("ALTER TABLE ranking_processes ADD COLUMN rejection_comment TEXT")
+    for column in ("external_rating_agency", "external_rating_date", "external_rating"):
+        if column not in process_columns:
+            conn.execute(f"ALTER TABLE ranking_processes ADD COLUMN {column} TEXT")
     process_count = conn.execute("SELECT COUNT(*) FROM ranking_processes").fetchone()[0]
     if process_count == 0 and not already_seeded("ranking_processes"):
         conn.executemany(
@@ -1325,7 +1352,8 @@ def init_db():
             can_delete INTEGER NOT NULL DEFAULT 0,
             can_approve INTEGER NOT NULL DEFAULT 0,
             can_committee_approve INTEGER NOT NULL DEFAULT 0,
-            can_rerun INTEGER NOT NULL DEFAULT 0
+            can_rerun INTEGER NOT NULL DEFAULT 0,
+            can_manage_notifications INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -1340,18 +1368,30 @@ def init_db():
         ("can_approve", "INTEGER NOT NULL DEFAULT 0"),
         ("can_committee_approve", "INTEGER NOT NULL DEFAULT 0"),
         ("can_rerun", "INTEGER NOT NULL DEFAULT 0"),
+        ("can_manage_notifications", "INTEGER NOT NULL DEFAULT 0"),
     ]:
         if col not in role_columns:
             conn.execute(f"ALTER TABLE roles ADD COLUMN {col} {ddl}")
+            if col == "can_manage_notifications":
+                # New column defaults everyone to 0 — give מנהל מערכת (the
+                # role whose own description already covers system
+                # settings/audit) the same True default SEED_ROLE_ROWS
+                # would give it on a fresh install, without touching any
+                # role a user may since have edited manually.
+                conn.execute(
+                    "UPDATE roles SET can_manage_notifications = 1 WHERE id = 'RATING_SYSADMIN'"
+                )
 
     role_count = conn.execute("SELECT COUNT(*) FROM roles").fetchone()[0]
     if role_count == 0:
         conn.executemany(
             """
             INSERT INTO roles (id, name, name_en, description, can_view, can_create, can_edit,
-                                can_delete, can_approve, can_committee_approve, can_rerun)
+                                can_delete, can_approve, can_committee_approve, can_rerun,
+                                can_manage_notifications)
             VALUES (:id, :name, :name_en, :description, :can_view, :can_create, :can_edit,
-                    :can_delete, :can_approve, :can_committee_approve, :can_rerun)
+                    :can_delete, :can_approve, :can_committee_approve, :can_rerun,
+                    :can_manage_notifications)
             """,
             SEED_ROLE_ROWS,
         )
@@ -1370,9 +1410,11 @@ def init_db():
             conn.executemany(
                 """
                 INSERT INTO roles (id, name, name_en, description, can_view, can_create, can_edit,
-                                    can_delete, can_approve, can_committee_approve, can_rerun)
+                                    can_delete, can_approve, can_committee_approve, can_rerun,
+                                    can_manage_notifications)
                 VALUES (:id, :name, :name_en, :description, :can_view, :can_create, :can_edit,
-                        :can_delete, :can_approve, :can_committee_approve, :can_rerun)
+                        :can_delete, :can_approve, :can_committee_approve, :can_rerun,
+                        :can_manage_notifications)
                 """,
                 SEED_ROLE_ROWS,
             )
@@ -1547,6 +1589,32 @@ def init_db():
         if col not in notification_columns:
             conn.execute(f"ALTER TABLE notifications ADD COLUMN {col} TEXT")
 
+    # User-authored notification rules (יצירת התראה חדשה, on the סוגי
+    # התראות tab): each rule sends its own custom email (title + message,
+    # to a chosen recipient) whenever any of its linked notification_types
+    # fires — on top of, not instead of, that type's own default email —
+    # see _create_notification()/_trigger_notification_rules().
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            recipient_email TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_rule_types (
+            rule_id INTEGER NOT NULL REFERENCES notification_rules(id),
+            notification_type_id TEXT NOT NULL REFERENCES notification_types(id),
+            PRIMARY KEY (rule_id, notification_type_id)
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
 
@@ -1690,7 +1758,8 @@ def get_all_rankings():
     conn = get_connection()
     rows = [dict(row) for row in conn.execute("SELECT * FROM rankings ORDER BY id DESC").fetchall()]
     process_rows = conn.execute(
-        "SELECT id, final_score, final_rating, computed_score, computed_rating, completion FROM ranking_processes"
+        "SELECT id, final_score, final_rating, computed_score, computed_rating, completion, "
+        "external_rating_agency, external_rating_date, external_rating FROM ranking_processes"
     ).fetchall()
     _attach_ranking_model_names(conn, rows)
     _attach_issuer_display_names(conn, rows)
@@ -1704,6 +1773,9 @@ def get_all_rankings():
         row["final_rating"] = proc["final_rating"] if proc else None
         row["computed_score"] = proc["computed_score"] if proc else None
         row["computed_rating"] = proc["computed_rating"] if proc else None
+        row["external_rating_agency"] = proc["external_rating_agency"] if proc else None
+        row["external_rating_date"] = proc["external_rating_date"] if proc else None
+        row["external_rating"] = proc["external_rating"] if proc else None
         row["completion"] = proc["completion"] if proc else 0
 
         row["data_date"] = (
@@ -2033,12 +2105,15 @@ def _next_process_id():
 
 
 def create_ranking_process(
-    model_id: str,
+    model_id: str | None,
     kind: str,
     framework_issuer_id: str | None,
     framework_asset_id: str | None,
     data_date: str | None,
     owner: str,
+    external_rating_agency: str | None = None,
+    external_rating_date: str | None = None,
+    external_rating: str | None = None,
 ):
     """Creates a new תהליך דירוג: a rankings row (for the report page) and a
     matching ranking_processes row (for the processes page), sharing the same
@@ -2046,7 +2121,17 @@ def create_ranking_process(
     framework_issuer_id — when the framework is an asset, that's the asset's
     own issuer_id, so the ranked entity is still the issuer that owns it.
     owner (a users.id) is the אחראי תהליך — who gets emailed if a manager
-    later returns the process with a comment (see reject_manager_process())."""
+    later returns the process with a comment (see reject_manager_process()).
+
+    external_rating (+ its date and optional agency) is an alternative to
+    the normal model_id-driven flow: instead of picking a model and later
+    filling out its questionnaires, the caller directly records a
+    third-party agency's already-issued rating. There's no internal
+    computation or approval workflow to run in that case — the rating is
+    already a decided fact — so the process is created directly at בתוקף,
+    with model_id left NULL and the external rating's own date doubling
+    as approval_date (so the report page's validity window is anchored to
+    when the external agency actually rated it)."""
     conn = get_connection()
     if kind == "נכס":
         asset = conn.execute("SELECT issuer_id FROM assets WHERE id = ?", (framework_asset_id,)).fetchone()
@@ -2054,24 +2139,32 @@ def create_ranking_process(
     else:
         resolved_issuer_id = framework_issuer_id
 
+    is_external = external_rating is not None
+    status = "בתוקף" if is_external else "טיוטה"
+    tone = "green" if is_external else "gray"
+    approval_date = external_rating_date if is_external else None
+
     new_id = _next_process_id()
     conn.execute(
         """
         INSERT INTO rankings
             (id, status, tone, model_id, team_id, framework_issuer_id, framework_asset_id, kind, code,
              subject_issuer_id, approval_date, data_date)
-        VALUES (?, 'טיוטה', 'gray', ?, NULL, ?, ?, ?, '-', ?, NULL, ?)
+        VALUES (?, ?, ?, ?, NULL, ?, ?, ?, '-', ?, ?, ?)
         """,
-        (new_id, model_id, resolved_issuer_id, framework_asset_id, kind, resolved_issuer_id, data_date),
+        (new_id, status, tone, model_id, resolved_issuer_id, framework_asset_id, kind, resolved_issuer_id,
+         approval_date, data_date),
     )
     conn.execute(
         """
         INSERT INTO ranking_processes
             (id, subject_issuer_id, code, framework_issuer_id, framework_asset_id, status, tone,
-             final_score, final_rating, computed_score, computed_rating, completion, owner)
-        VALUES (?, ?, '-', ?, ?, 'טיוטה', 'gray', NULL, NULL, NULL, NULL, 0, ?)
+             final_score, final_rating, computed_score, computed_rating, completion, owner,
+             external_rating_agency, external_rating_date, external_rating)
+        VALUES (?, ?, '-', ?, ?, ?, ?, NULL, NULL, NULL, NULL, 0, ?, ?, ?, ?)
         """,
-        (new_id, resolved_issuer_id, resolved_issuer_id, framework_asset_id, owner),
+        (new_id, resolved_issuer_id, resolved_issuer_id, framework_asset_id, status, tone, owner,
+         external_rating_agency, external_rating_date, external_rating),
     )
     conn.commit()
     conn.close()
@@ -3210,7 +3303,7 @@ def duplicate_questionnaire(source_id: str, new_id: str, new_name: str, created_
 
 ROLE_PERMISSION_FIELDS = [
     "can_view", "can_create", "can_edit", "can_delete",
-    "can_approve", "can_committee_approve", "can_rerun",
+    "can_approve", "can_committee_approve", "can_rerun", "can_manage_notifications",
 ]
 
 
@@ -3273,18 +3366,21 @@ def create_role(
     can_approve: bool,
     can_committee_approve: bool,
     can_rerun: bool,
+    can_manage_notifications: bool = False,
 ):
     conn = get_connection()
     conn.execute(
         """
         INSERT INTO roles (id, name, name_en, description, can_view, can_create, can_edit,
-                            can_delete, can_approve, can_committee_approve, can_rerun)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            can_delete, can_approve, can_committee_approve, can_rerun,
+                            can_manage_notifications)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             id, name, name_en, description,
             int(can_view), int(can_create), int(can_edit), int(can_delete),
             int(can_approve), int(can_committee_approve), int(can_rerun),
+            int(can_manage_notifications),
         ),
     )
     conn.commit()
@@ -3305,18 +3401,21 @@ def update_role(
     can_approve: bool,
     can_committee_approve: bool,
     can_rerun: bool,
+    can_manage_notifications: bool = False,
 ):
     conn = get_connection()
     conn.execute(
         """
         UPDATE roles SET id = ?, name = ?, name_en = ?, description = ?, can_view = ?, can_create = ?,
-            can_edit = ?, can_delete = ?, can_approve = ?, can_committee_approve = ?, can_rerun = ?
+            can_edit = ?, can_delete = ?, can_approve = ?, can_committee_approve = ?, can_rerun = ?,
+            can_manage_notifications = ?
         WHERE id = ?
         """,
         (
             id, name, name_en, description,
             int(can_view), int(can_create), int(can_edit), int(can_delete),
             int(can_approve), int(can_committee_approve), int(can_rerun),
+            int(can_manage_notifications),
             original_id,
         ),
     )
@@ -4025,7 +4124,9 @@ def _create_notification(
     login/session in this app, so callers pass along whatever owner/
     created_by field the affected record already has; None means the
     event wasn't tied to a specific user (e.g. the lazy expiry check) and
-    displays as מערכת."""
+    displays as מערכת. Also fires any user-authored notification_rules
+    linked to this type (see _trigger_notification_rules()) — those are
+    on top of, not instead of, this type's own email above."""
     conn = get_connection()
     ntype = conn.execute("SELECT * FROM notification_types WHERE id = ?", (type_id,)).fetchone()
     email_to = None
@@ -4048,6 +4149,83 @@ def _create_notification(
             email_to, email_status, email_error, actor_user_id,
         ),
     )
+    conn.commit()
+    _trigger_notification_rules(conn, type_id, entity_id, actor_user_id)
+    conn.close()
+
+
+def _trigger_notification_rules(conn, type_id: str, entity_id: str | None, actor_user_id: str | None):
+    """Sends every user-authored notification_rule (יצירת התראה חדשה)
+    linked to type_id its own custom email — title and message exactly as
+    written when the rule was created, to that rule's own recipient_email
+    — regardless of the underlying type's own channels/notification_email
+    (creating the rule is itself the explicit request to be emailed).
+    Each send is logged as its own notifications row, same as the type's
+    own email, so it's auditable in יומן התראות."""
+    rules = conn.execute(
+        """
+        SELECT nr.id, nr.title, nr.message, nr.recipient_email
+        FROM notification_rules nr
+        JOIN notification_rule_types nrt ON nrt.rule_id = nr.id
+        WHERE nrt.notification_type_id = ?
+        """,
+        (type_id,),
+    ).fetchall()
+    for rule in rules:
+        sent, email_status, email_error = email_sender.send_email(
+            rule["recipient_email"], rule["title"], rule["message"]
+        )
+        conn.execute(
+            "INSERT INTO notifications "
+            "(notification_type_id, entity_id, message, created_at, email_sent_to, email_status, email_error, actor_user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                type_id, entity_id, rule["message"], datetime.now().isoformat(timespec="seconds"),
+                rule["recipient_email"], email_status, email_error, actor_user_id,
+            ),
+        )
+    conn.commit()
+
+
+def get_all_notification_rules():
+    conn = get_connection()
+    rules = [dict(r) for r in conn.execute("SELECT * FROM notification_rules ORDER BY id DESC").fetchall()]
+    links = conn.execute(
+        """
+        SELECT nrt.rule_id, nt.id AS type_id, nt.name AS type_name
+        FROM notification_rule_types nrt
+        JOIN notification_types nt ON nt.id = nrt.notification_type_id
+        """
+    ).fetchall()
+    conn.close()
+    types_by_rule = {}
+    for link in links:
+        types_by_rule.setdefault(link["rule_id"], []).append({"id": link["type_id"], "name": link["type_name"]})
+    for rule in rules:
+        rule["types"] = types_by_rule.get(rule["id"], [])
+    return rules
+
+
+def create_notification_rule(title: str, message: str, recipient_email: str, type_ids: list[str]):
+    conn = get_connection()
+    cursor = conn.execute(
+        "INSERT INTO notification_rules (title, message, recipient_email, created_at) VALUES (?, ?, ?, ?)",
+        (title, message, recipient_email, datetime.now().isoformat(timespec="seconds")),
+    )
+    rule_id = cursor.lastrowid
+    conn.executemany(
+        "INSERT INTO notification_rule_types (rule_id, notification_type_id) VALUES (?, ?)",
+        [(rule_id, type_id) for type_id in type_ids],
+    )
+    conn.commit()
+    conn.close()
+    return next(r for r in get_all_notification_rules() if r["id"] == rule_id)
+
+
+def delete_notification_rule(rule_id: int):
+    conn = get_connection()
+    conn.execute("DELETE FROM notification_rule_types WHERE rule_id = ?", (rule_id,))
+    conn.execute("DELETE FROM notification_rules WHERE id = ?", (rule_id,))
     conn.commit()
     conn.close()
 
@@ -4102,7 +4280,15 @@ def get_all_notifications():
     for row in rows:
         ntype = types_by_id.get(row["notification_type_id"])
         row["type_name"] = ntype["name"] if ntype else row["notification_type_id"]
-        row["channels"] = [c for c in (ntype["channels"] or "").split(",") if c] if ntype else []
+        channels = [c for c in (ntype["channels"] or "").split(",") if c] if ntype else []
+        # A notification_rule always sends its own email regardless of the
+        # underlying type's own configured channels (see
+        # _trigger_notification_rules()), so this specific row's actual
+        # channel can be broader than the type's static config — reflect
+        # that instead of showing "internal" for a row that did email out.
+        if row["email_sent_to"] and "email" not in channels:
+            channels = [*channels, "email"]
+        row["channels"] = channels
         row["actor_name"] = names_by_user_id.get(row["actor_user_id"], "מערכת") if row["actor_user_id"] else "מערכת"
     return rows
 

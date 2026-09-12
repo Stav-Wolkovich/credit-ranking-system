@@ -9,6 +9,7 @@ const PERMISSION_FIELDS = [
   { key: "can_approve", label: "אישור" },
   { key: "can_committee_approve", label: "אישור ועדה" },
   { key: "can_rerun", label: "הרצה מחדש" },
+  { key: "can_manage_notifications", label: "ניהול התראות" },
 ];
 
 function Field({ label, required, invalid, value, onChange }) {
@@ -48,6 +49,7 @@ export default function RoleModal({ mode, initial, onCancel, onSaved }) {
     can_approve: initial?.can_approve ?? false,
     can_committee_approve: initial?.can_committee_approve ?? false,
     can_rerun: initial?.can_rerun ?? false,
+    can_manage_notifications: initial?.can_manage_notifications ?? false,
   });
   const [fieldErrors, setFieldErrors] = useState(new Set());
   const [error, setError] = useState(null);
@@ -85,6 +87,7 @@ export default function RoleModal({ mode, initial, onCancel, onSaved }) {
       can_approve: form.can_approve,
       can_committee_approve: form.can_committee_approve,
       can_rerun: form.can_rerun,
+      can_manage_notifications: form.can_manage_notifications,
     };
     try {
       const saved =

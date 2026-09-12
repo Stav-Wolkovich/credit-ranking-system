@@ -179,6 +179,7 @@ class RoleInput(BaseModel):
     can_approve: bool = False
     can_committee_approve: bool = False
     can_rerun: bool = False
+    can_manage_notifications: bool = False
 
 
 class UserInput(BaseModel):
@@ -219,6 +220,13 @@ class ReportInput(BaseModel):
 
 class NotificationTypeEmailInput(BaseModel):
     notification_email: Optional[str] = None
+
+
+class NotificationRuleInput(BaseModel):
+    title: str
+    message: str
+    recipient_email: str
+    type_ids: List[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -381,25 +389,41 @@ def get_processes():
 
 
 class ProcessCreateInput(BaseModel):
-    model_id: str
+    model_id: Optional[str] = None
     kind: str
     framework_issuer_id: Optional[str] = None
     framework_asset_id: Optional[str] = None
     data_date: Optional[str] = None
     owner: str
+    external_rating_agency: Optional[str] = None
+    external_rating_date: Optional[str] = None
+    external_rating: Optional[str] = None
 
 
 @app.post("/api/processes", status_code=201)
 def create_process(payload: ProcessCreateInput):
     if payload.kind not in ("מנפיק", "נכס"):
         raise HTTPException(status_code=422, detail="סוג מסגרת לא תקין")
-    model = database.get_model(payload.model_id)
-    if not model:
-        raise HTTPException(status_code=422, detail="מודל דירוג לא נמצא")
-    if model["status"] != "פעיל":
-        raise HTTPException(status_code=422, detail="ניתן לבחור רק מודל בסטטוס פעיל")
-    if model["questionnaires_count"] < 1:
-        raise HTTPException(status_code=422, detail="למודל הנבחר אין שאלונים מקושרים")
+
+    external_rating = (payload.external_rating or "").strip() or None
+    external_rating_date = (payload.external_rating_date or "").strip() or None
+    external_rating_agency = (payload.external_rating_agency or "").strip() or None
+    is_external = external_rating is not None or external_rating_date is not None
+
+    model_id = None
+    if is_external:
+        if not external_rating or not external_rating_date:
+            raise HTTPException(status_code=422, detail="יש להזין תאריך ודירוג עבור דירוג חיצוני")
+    else:
+        model = database.get_model(payload.model_id or "")
+        if not model:
+            raise HTTPException(status_code=422, detail="מודל דירוג לא נמצא")
+        if model["status"] != "פעיל":
+            raise HTTPException(status_code=422, detail="ניתן לבחור רק מודל בסטטוס פעיל")
+        if model["questionnaires_count"] < 1:
+            raise HTTPException(status_code=422, detail="למודל הנבחר אין שאלונים מקושרים")
+        model_id = payload.model_id
+
     if not payload.owner.strip() or not database.get_user(payload.owner):
         raise HTTPException(status_code=422, detail="יש לבחור אחראי תהליך קיים")
     if payload.kind == "מנפיק":
@@ -412,12 +436,15 @@ def create_process(payload: ProcessCreateInput):
             raise HTTPException(status_code=422, detail="יש לבחור נכס קיים")
         framework_asset_id = asset["id"]
     return database.create_ranking_process(
-        model_id=payload.model_id,
+        model_id=model_id,
         kind=payload.kind,
         framework_issuer_id=payload.framework_issuer_id,
         framework_asset_id=framework_asset_id,
         data_date=payload.data_date,
         owner=payload.owner.strip(),
+        external_rating_agency=external_rating_agency,
+        external_rating_date=external_rating_date,
+        external_rating=external_rating,
     )
 
 
@@ -992,6 +1019,7 @@ def _clean_role_input(payload: RoleInput):
         "can_approve": payload.can_approve,
         "can_committee_approve": payload.can_committee_approve,
         "can_rerun": payload.can_rerun,
+        "can_manage_notifications": payload.can_manage_notifications,
     }
 
 
@@ -1369,3 +1397,34 @@ def get_notifications():
     database.refresh_expiry_notifications()
     rows = database.get_all_notifications()
     return {"rows": rows, "total": len(rows)}
+
+
+@app.get("/api/notification-rules")
+def get_notification_rules():
+    rows = database.get_all_notification_rules()
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.post("/api/notification-rules", status_code=201)
+def create_notification_rule(payload: NotificationRuleInput):
+    title = payload.title.strip()
+    message = payload.message.strip()
+    recipient_email = payload.recipient_email.strip()
+    type_ids = [t.strip() for t in payload.type_ids if t.strip()]
+    if not title or not message or not recipient_email:
+        raise HTTPException(status_code=422, detail="כותרת, הודעה וכתובת אימייל הם שדות חובה")
+    if "@" not in recipient_email:
+        raise HTTPException(status_code=422, detail="כתובת האימייל אינה תקינה")
+    if not type_ids:
+        raise HTTPException(status_code=422, detail="יש לבחור לפחות סוג התראה אחד")
+    for type_id in type_ids:
+        if not database.get_notification_type(type_id):
+            raise HTTPException(status_code=422, detail=f"סוג התראה לא נמצא: {type_id}")
+    return database.create_notification_rule(title, message, recipient_email, type_ids)
+
+
+@app.delete("/api/notification-rules/{rule_id}", status_code=204)
+def delete_notification_rule(rule_id: int):
+    if not any(r["id"] == rule_id for r in database.get_all_notification_rules()):
+        raise HTTPException(status_code=404, detail="התראה לא נמצאה")
+    database.delete_notification_rule(rule_id)

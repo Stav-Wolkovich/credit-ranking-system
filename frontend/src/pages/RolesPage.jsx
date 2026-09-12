@@ -13,6 +13,7 @@ const PERMISSION_COLUMNS = [
   { key: "can_approve", label: "אישור" },
   { key: "can_committee_approve", label: "אישור ועדה" },
   { key: "can_rerun", label: "הרצה מחדש" },
+  { key: "can_manage_notifications", label: "ניהול התראות" },
 ];
 
 const COLUMNS = [
